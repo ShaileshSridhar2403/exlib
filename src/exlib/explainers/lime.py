@@ -58,10 +58,13 @@ def explain_torch_reg_with_lime(X, model, normalize=False, **kwargs):
         
     f = batch_predict_from_torch(model, 'reg', preprocess=p)
     
-    output = []
+    lime_exps = []
     for X0_np in X_np: 
         explainer = lime_image.LimeImageExplainer()
         explanation = explainer.explain_instance(X0_np, f, **kwargs)
-        output.append(explanation)
-    return output
+        lime_exps.append(explanation)
+
+    return {
+        "lime_explanations" : lime_exps
+    }
     

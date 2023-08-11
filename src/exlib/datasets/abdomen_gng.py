@@ -8,6 +8,9 @@ import cv2
 class AbdomenGNG(Dataset):
   def __init__(self,
                data_dir,
+               image_train_dirname = "images_train",
+               image_test_dirname = "images_test",
+               mask_dirname = "masks",
                split = "train",
                image_height = 352,  # Default image height / widths
                image_width = 640,
@@ -19,8 +22,12 @@ class AbdomenGNG(Dataset):
 
     self.split = split
     self.data_dir = data_dir
-    self.mask_dir = os.path.join(data_dir, "masks")
-    self.image_dir = os.path.join(data_dir, "images_train" if split == "train" else "images_test")
+    self.mask_dir = os.path.join(data_dir, mask_dirname)
+    if split == "train":
+      self.image_dir = os.path.join(data_dir, image_train_dirname)
+    else:
+      self.image_dir = os.path.join(data_dir, image_test_dirname)
+
     assert os.path.isdir(self.mask_dir), f"mask directory does not exist {self.mask_dir}"
     assert os.path.isdir(self.image_dir), f"image directory does not exist {self.image_dir}"
 
