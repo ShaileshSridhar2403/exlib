@@ -53,11 +53,11 @@ class AbdomenOrgans(Dataset):
     # Split not regarding video
     torch.manual_seed(split_seed)
     if split == "train" or split == "test":
-      all_image_names = sorted(os.listdir(self.images_dir))
-      num_all, num_train = len(all_image_names), int(len(all_image_names) * train_ratio)
+      all_image_filenames = sorted(os.listdir(self.images_dir))
+      num_all, num_train = len(all_image_filenames), int(len(all_image_filenames) * train_ratio)
       idx_perms = torch.randperm(num_all)
       todo_idxs = idx_perms[:num_train] if split == "train" else idx_perms[num_train:]
-      self.image_names = sorted([all_image_names[i] for i in todo_idxs])
+      self.image_filenames = sorted([all_image_filenames[i] for i in todo_idxs])
 
     # Split by the video source
     elif split == "train_video" or split == "test_video":
@@ -65,10 +65,10 @@ class AbdomenOrgans(Dataset):
       idx_perms = torch.randperm(num_all)
       todo_idxs = idx_perms[:num_train] if "train" in split else idx_perms[num_train:]
 
-      image_names = []
+      image_filenames = []
       for idx in todo_idxs:
-        image_names += glob.glob(os.path.join(self.images_dir, VIDEO_GLOBS[idx]))
-      self.image_names = sorted(image_names)
+        image_filenames += glob.glob(os.path.join(self.images_dir, VIDEO_GLOBS[idx]))
+      self.image_filenames = sorted(image_filenames)
 
     else:
       raise NotImplementedError()
@@ -102,12 +102,12 @@ class AbdomenOrgans(Dataset):
           transforms.Resize((image_height, image_width))
 
   def __len__(self):
-    return len(self.image_names)
+    return len(self.image_filenames)
 
   def __getitem__(self, idx):
-    image_file = os.path.join(self.images_dir, self.image_names[idx])
-    organ_mask_file = os.path.join(self.organ_masks_dir, self.image_names[idx])
-    gonogo_mask_file = os.path.join(self.gonogo_masks_dir, self.image_names[idx])
+    image_file = os.path.join(self.images_dir, self.image_filenames[idx])
+    organ_mask_file = os.path.join(self.organ_masks_dir, self.image_filenames[idx])
+    gonogo_mask_file = os.path.join(self.gonogo_masks_dir, self.image_filenames[idx])
 
     # Read image and mask
     image_np = cv2.imread(image_file)
