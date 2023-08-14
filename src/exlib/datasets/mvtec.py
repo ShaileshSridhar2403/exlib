@@ -92,8 +92,7 @@ class MVTec(Dataset):
       else:
         mask_file = image_file
         sps = image_file.split("/")
-        mask_file = os.path.join(*(["/"] + sps[:-3] + ["ground_truth"] + sps[-2:]))
-        mask_file = mask_file.replace(".png", "_mask.png")
+        mask_file = os.path.join(self.masks_root_dir, sps[-2], sps[-1].replace(".png", "_mask.png"))
         mask_np = cv2.imread(mask_file, cv2.IMREAD_GRAYSCALE)
         mask = torch.tensor(mask_np != 0).byte().unsqueeze(0)
         print(f"mask shape is {mask.shape}")
