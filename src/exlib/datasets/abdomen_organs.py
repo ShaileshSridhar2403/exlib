@@ -26,14 +26,14 @@ class AbdomenOrgans(Dataset):
   def __init__(self,
                data_dir,
                images_dirname = "images",
-               gonogo_masks_dirname = "gonogo_masks",
-               organ_masks_dirname = "organ_masks",
+               gonogo_labels_dirname = "gonogo_labels",
+               organ_labels_dirname = "organ_labels",
                split = "train",
                train_ratio = 0.8,
                image_height = 360,  # Default image height / widths
                image_width = 640,
                image_transforms = None,
-               mask_transforms = None,
+               label_transforms = None,
                split_seed = 1234,
                download = False):
     if download:
@@ -41,12 +41,12 @@ class AbdomenOrgans(Dataset):
 
     self.data_dir = data_dir
     self.images_dir = os.path.join(data_dir, images_dirname)
-    self.gonogo_masks_dir = os.path.join(data_dir, gonogo_masks_dirname)
-    self.organ_masks_dir = os.path.join(data_dir, organ_masks_dirname)
+    self.gonogo_labels_dir = os.path.join(data_dir, gonogo_labels_dirname)
+    self.organ_labels_dir = os.path.join(data_dir, organ_labels_dirname)
 
     assert os.path.isdir(self.images_dir)
-    assert os.path.isdir(self.gonogo_masks_dir)
-    assert os.path.isdir(self.organ_masks_dir)
+    assert os.path.isdir(self.gonogo_labels_dir)
+    assert os.path.isdir(self.organ_labels_dir)
     assert split in SPLIT_TYPES
     self.split = split
 
@@ -83,7 +83,7 @@ class AbdomenOrgans(Dataset):
         transforms.RandomRotation(60), 
       ])
 
-      self._mask_transforms = transforms.Compose([
+      self._label_transforms = transforms.Compose([
         transforms.Resize((image_height, image_width), antialias=False),
         transforms.RandomRotation(60), 
       ])
@@ -91,14 +91,14 @@ class AbdomenOrgans(Dataset):
       self.image_transforms = image_transforms if image_transforms is not None else \
           lambda image, seed : (torch.manual_seed(seed), self._image_transforms(image))[1]
 
-      self.mask_transforms = mask_transforms if mask_transforms is not None else \
-          lambda mask, seed : (torch.manual_seed(seed), self._mask_transforms(mask))[1]
+      self.label_transforms = label_transforms if label_transforms is not None else \
+          lambda label, seed : (torch.manual_seed(seed), self._label_transforms(label))[1]
 
     elif "test" in split:
       self.image_transforms = image_transforms if image_transforms is not None else \
           transforms.Resize((image_height, image_width))
 
-      self.mask_transforms = mask_transforms if mask_transforms is not None else \
+      self.label_transforms = label_transforms if label_transforms is not None else \
           transforms.Resize((image_height, image_width))
 
   def __len__(self):
@@ -106,28 +106,28 @@ class AbdomenOrgans(Dataset):
 
   def __getitem__(self, idx):
     image_file = os.path.join(self.images_dir, self.image_filenames[idx])
-    organ_mask_file = os.path.join(self.organ_masks_dir, self.image_filenames[idx])
-    gonogo_mask_file = os.path.join(self.gonogo_masks_dir, self.image_filenames[idx])
+    organ_label_file = os.path.join(self.organ_labels_dir, self.image_filenames[idx])
+    gonogo_label_file = os.path.join(self.gonogo_labels_dir, self.image_filenames[idx])
 
-    # Read image and mask
+    # Read image and label
     image_np = cv2.imread(image_file)
-    organ_mask_np = cv2.imread(organ_mask_file, cv2.IMREAD_GRAYSCALE)
-    gonogo_mask_np = cv2.imread(gonogo_mask_file, cv2.IMREAD_GRAYSCALE)
+    organ_label_np = cv2.imread(organ_label_file, cv2.IMREAD_GRAYSCALE)
+    gonogo_label_np = cv2.imread(gonogo_label_file, cv2.IMREAD_GRAYSCALE)
 
-    image = torch.tensor(image_np.transpose(2,0,1))                     # (3, H, C)
-    organ_mask = torch.tensor(organ_mask_np).unsqueeze(dim=0).byte()    # (1, H, C)
-    gonogo_mask = torch.tensor(gonogo_mask_np).unsqueeze(dim=0).byte()  # (1, H, C)
+    image = torch.tensor(image_np.transpose(2,0,1))                       # (3, H, C)
+    organ_label = torch.tensor(organ_label_np).unsqueeze(dim=0).byte()    # (1, H, C)
+    gonogo_label = torch.tensor(gonogo_label_np).unsqueeze(dim=0).byte()  # (1, H, C)
 
     if self.split == "train":
       seed = torch.seed()
       image = self.image_transforms(image, seed)
-      organ_mask = self.mask_transforms(organ_mask, seed)
-      gonogo_mask = self.mask_transforms(gonogo_mask, seed)
+      organ_label = self.label_transforms(organ_label, seed)
+      gonogo_label = self.label_transforms(gonogo_label, seed)
     else:
       image = self.image_transforms(image)
-      organ_mask = self.mask_transforms(organ_mask)
-      gonogo_mask = self.mask_transforms(gonogo_mask)
+      organ_label = self.label_transforms(organ_label)
+      gonogo_label = self.label_transforms(gonogo_label)
 
-    return image, organ_mask, gonogo_mask
+    return image, organ_label, gonogo_label
 
 
