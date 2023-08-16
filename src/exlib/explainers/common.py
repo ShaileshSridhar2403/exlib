@@ -14,3 +14,20 @@ def patch_segmenter(image, sz=(8,8)):
     segments = F.interpolate(idx, size=X.size()[:2], mode='nearest').long()
     segments = segments[0,0].numpy()
     return segments
+
+def torch_img_to_np(X): 
+	if X.dim() == 4: 
+		return X.permute(0,2,3,1).numpy()
+	elif X.dim() == 3: 
+		return X.permute(1,2,0).numpy()
+	else: 
+		raise ValueError("Image tensor doesn't have 3 or 4 dimensions")
+
+def np_to_torch_img(X_np):
+	X = torch.from_numpy(X_np) 
+	if X.dim() == 4: 
+		return X.permute(0,3,1,2)
+	elif X.dim() == 3: 
+		return X.permute(2,0,1)
+	else: 
+		raise ValueError("Image array doesn't have 3 or 4 dimensions")

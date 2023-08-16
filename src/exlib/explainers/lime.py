@@ -3,14 +3,14 @@ import torch.nn.functional as F
 import lime
 import numpy as np
 from lime import lime_image
-from .common import AttributionOutput
+from .common import AttributionOutput, torch_img_to_np, np_to_torch_img
 
 def batch_predict_from_torch(model, task, preprocess=None): 
     """ Batch predict function for a pytorch model """
     def batch_predict(inp):
         model.eval()
         if preprocess is not None: 
-            inp = preprocess(inp)
+            inp = preprocess(inp) 
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
@@ -42,21 +42,21 @@ def explain_torch_reg_with_lime(X, model, label, normalize=False, LimeImageExpla
     # get_image_and_mask arguments
     positive_only=True, negative_only=False, hide_rest=False, num_features=5, min_weight=0.0
     """
-    collapse = (X.ndim == 4) and (X.size(1) == 1)
+    collapse = (X.ndim == 4) and (X.size(1) == 1) # check if single or RGB channel
     X_min, X_max = X.min(), X.max()
     if normalize: 
         X = (X - X_min)/(X_max-X_min) # shift to 0-1 range
-    X_np = X.permute(0,2,3,1).numpy() # rearrange dimensions for numpy
+    X_np = torch_img_to_np(X) # rearrange dimensions for numpy
     if collapse: 
         X_np = X_np[:,:,:,0] # lime needs no singleton last dimension
         
     def p(X): 
-        X = torch.from_numpy(X)
+        X = np_to_torch_img(X)
         if collapse: 
-            X = X[:,:,:,0:1] # even though limt needs no singleton last dimension in its input, 
+            X = X[:,0:1,:,:] # even though lime needs no singleton last dimension in its input, 
             # for an odd reason they put back 3 of them to match RGB format before passing 
             # to batch_predict. So we need to remove the extraneous ones. 
-        X = X.permute(0,3,1,2) # undo permutation
+
         if normalize: 
             X = X*(X_max - X_min) + X_min # undo shift
         return X
