@@ -14,9 +14,9 @@ class TorchAttribution(nn.Module):
 		explain the largest output. """
 		raise NotImplementedError()
 
-class TorchLime(TorchAttribution): 
+class TorchImageLime(TorchAttribution): 
 	def __init__(self, model, normalize=False, **kwargs):
-		super(TorchLime, self).__init__(model) 
+		super(TorchImageLime, self).__init__(model) 
 		self.normalize = normalize
 		self.kwargs = kwargs
 
