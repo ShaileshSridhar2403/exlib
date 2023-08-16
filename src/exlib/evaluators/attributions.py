@@ -19,7 +19,7 @@ class NNZ(Evaluator):
 
 	def forward(self, X, Z, tol=1e-5, normalize=False): 
 		n = Z.size(0)
-		Z = (Z.abs() > tol).view(n,-1)
+		Z = (Z.abs() > tol).reshape(n,-1)
 		nnz = torch.count_nonzero(Z,dim=1)
 		if normalize: 
 			return nnz / Z.size(1)
