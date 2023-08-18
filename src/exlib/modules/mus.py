@@ -119,7 +119,7 @@ class VisionMuS(MuS):
         x_masked = F.interpolate(alpha, scale_factor=self.patch_size * 1.0) * x
         return x_masked
 
-    def forward(self, x, eps=1e-4, **kwargs):
+    def forward(self, x, **kwargs):
         assert self.image_shape == x.shape[1:]
         yqs = super(VisionMuS, self).forward(x, return_all_qs=True, **kwargs)
 
