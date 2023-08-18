@@ -24,9 +24,9 @@ class MassMaps(TensorDataset):
         
         super(MassMaps,self).__init__(X,y)
 
-class MassMapsPspnet(nn.Module):
+class MassMapsConvnet(nn.Module):
     def __init__(self, data_dir):
-        super(MassMapsPspnet, self).__init__()
+        super(MassMapsConvnet, self).__init__()
         output_num = 2
         
         # self.normalization = nn.BatchNorm2d(1)
