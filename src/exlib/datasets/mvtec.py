@@ -13,8 +13,6 @@ import FrEIA.framework as Ff
 import FrEIA.modules as Fm
 import timm
 
-
-
 #####
 MVTEC_CATEGORIES = [
     "bottle",
@@ -33,6 +31,10 @@ MVTEC_CATEGORIES = [
     "wood",
     "zipper",
 ]
+
+mvtec_preprocess_transforms = transforms.Compose([
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
 
 class MVTec(Dataset):
   def __init__(self,
@@ -68,13 +70,13 @@ class MVTec(Dataset):
 
     self.image_transforms = image_transforms if image_transforms is not None else \
         transforms.Compose([
-          transforms.Resize(image_size),
+          transforms.Resize(image_size, antialias=True),
           # transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
 
     self.mask_transforms = mask_transforms if mask_transforms is not None else \
         transforms.Compose([
-          transforms.Resize(image_size),
+          transforms.Resize(image_size, antialias=True),
         ])
 
     self.good_value = good_value
@@ -102,7 +104,6 @@ class MVTec(Dataset):
         mask_file = os.path.join(self.masks_root_dir, sps[-2], sps[-1].replace(".png", "_mask.png"))
         mask_np = cv2.imread(mask_file, cv2.IMREAD_GRAYSCALE)
         mask = torch.tensor(mask_np != 0).byte().unsqueeze(0)
-        print(f"mask shape is {mask.shape}")
         mask = self.mask_transforms(mask)
         y = self.anom_value
 
@@ -158,9 +159,10 @@ class FastFlow(nn.Module):
         input_size = 256,
         conv3x3_only = False,
         hidden_ratio = 1.0,
-        normalize_input = True,
+        preprocess_input = True,
     ):
         super(FastFlow, self).__init__()
+        self.backbone_name = backbone_name
         assert (
             backbone_name in SUPPORTED_BACKBONES
         ), "backbone_name must be one of {}".format(SUPPORTED_BACKBONES)
@@ -205,15 +207,15 @@ class FastFlow(nn.Module):
             )
         self.input_size = input_size
 
-        self.normalize_input = normalize_input
-        self.normalize_transform = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        self.preprocess_input = preprocess_input
+        self.preprocess_transforms = mvtec_preprocess_transforms
 
 
-    def forward(self, x, normalize_input=None):
-        normalize_input = self.normalize_input if normalize_input is None else normalize_input
+    def forward(self, x, preprocess_input=None):
+        preprocess_input = self.preprocess_input if preprocess_input is None else preprocess_input
 
-        if normalize_input:
-            x = self.normalize_transform(x.float())
+        if preprocess_input:
+            x = self.preprocess_transforms(x.float())
 
         self.feature_extractor.eval()
         if isinstance(
@@ -256,10 +258,8 @@ class FastFlow(nn.Module):
             features = self.feature_extractor(x)
             features = [self.norms[i](feature) for i, feature in enumerate(features)]
 
-
         log_prob_maps = []
         log_jac_dets = []
-
         for i, feature in enumerate(features):
             output, log_jac_det = self.nf_flows[i](feature)
             log_prob = (-0.5) * torch.mean(output**2, dim=1, keepdim=True)
@@ -269,18 +269,19 @@ class FastFlow(nn.Module):
                 mode = "bilinear",
                 align_corners = False
             )   # (N,1,256,256)
+
             log_prob_maps.append(log_prob_map)
             log_jac_dets.append(log_jac_det)
 
-        log_prob_map = torch.sum(torch.stack(log_prob_maps, dim=-1), dim=-1)
-        log_jac_det = torch.sum(torch.stack(log_jac_dets, dim=-1), dim=-1)
-
-        loss = -log_prob_map.sum(dim=(1,2,3)) - log_jac_det
+        heatmap = torch.mean(torch.stack(log_prob_maps, dim=-1), dim=-1)
+        residual = torch.mean(torch.stack(log_jac_dets, dim=-1), dim=-1)
+        reward = heatmap.sum(dim=(1,2,3)) + residual
+        loss = -reward
 
         ret = {
             "loss" : loss,
-            "log_prob_map" : log_prob_map,  # (N,1,256,256)
-            "log_jac_det" : log_jac_det,    # (N,)
+            "heatmap" : heatmap, #(N,1,256,256)
+            "residual" : residual # (N,)
         }
 
         return ret
