@@ -625,4 +625,4 @@ class SoP(PreTrainedModel):
                                         output_mask_weights,
                                         masks_max_pred_cls)
         else:
-            return masks_aggr_pred_cls
+            return weighted_output

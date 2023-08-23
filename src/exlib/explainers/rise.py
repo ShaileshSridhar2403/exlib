@@ -8,13 +8,15 @@ import torch
 import torch.nn as nn
 from skimage.transform import resize
 from tqdm import tqdm
-from .torch_explainer import TorchAttribution
+from .common import TorchAttribution
 from .common import AttributionOutput
 
 
 class TorchImageRISE(TorchAttribution):
-    def __init__(self, model, input_size, gpu_batch=100, N=2000, s=8, p1=0.5, seed=42):
-        super(TorchImageRISE, self).__init__(model)
+    def __init__(self, model, input_size, postprocess=None, \
+                 gpu_batch=100, N=2000, \
+                 s=8, p1=0.5, seed=42):
+        super(TorchImageRISE, self).__init__(model, postprocess)
         self.input_size = input_size
         self.gpu_batch = gpu_batch
         self.generate_masks(N, s, p1)
@@ -59,11 +61,17 @@ class TorchImageRISE(TorchAttribution):
         #p = nn.Softmax(dim=1)(model(stack)) in batches
         p = []
         for i in range(0, N*B, self.gpu_batch):
-            p.append(self.model(stack[i:min(i + self.gpu_batch, N*B)]))
+            pred = self.model(stack[i:min(i + self.gpu_batch, N*B)])
+            if self.postprocess is not None:
+                pred = self.postprocess(pred)
+            p.append(pred)
         p = torch.cat(p)
         if label is None:
             # if no label, then explain the top class
-            label = torch.argmax(self.model(x), dim=-1)
+            pred_x = self.model(x)
+            if self.postprocess is not None:
+                pred_x = self.postprocess(pred_x)
+            label = torch.argmax(pred_x, dim=-1)
         CL = p.size(1)
         p = p.view(N, B, CL)
         sal = torch.matmul(p.permute(1, 2, 0), self.masks.view(N, H * W))

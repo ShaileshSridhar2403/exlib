@@ -2,7 +2,8 @@ import torch
 import shap
 from .common import AttributionOutput, torch_img_to_np, np_to_torch_img
 
-def explain_torch_with_shap(X, model, mask_value, explainer_kwargs, shap_kwargs): 
+def explain_torch_with_shap(X, model, mask_value, explainer_kwargs, 
+                            shap_kwargs, postprocess=None): 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     X_np = torch_img_to_np(X.cpu())
     masker = shap.maskers.Image(mask_value, X_np[0].shape)
@@ -10,7 +11,10 @@ def explain_torch_with_shap(X, model, mask_value, explainer_kwargs, shap_kwargs)
     def f(X): 
         model.to(device)
         with torch.no_grad(): 
-            return model(np_to_torch_img(X).to(device)).detach().cpu().numpy()
+            pred = model(np_to_torch_img(X).to(device))
+            if postprocess:
+                pred = postprocess(pred)
+            return pred.detach().cpu().numpy()
 
     # By default the Partition explainer is used for all  partition explainer
     explainer = shap.Explainer(f, masker, **explainer_kwargs)

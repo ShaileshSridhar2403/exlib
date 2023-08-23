@@ -8,7 +8,7 @@ from .attributions import Evaluator
 
 class InsDel(Evaluator):
 
-    def __init__(self, model, mode, step, substrate_fn):
+    def __init__(self, model, mode, step, substrate_fn, postprocess):
         """Create deletion/insertion metric instance.
         Args:
             model (nn.Module): Black-box model being explained.
@@ -23,6 +23,7 @@ class InsDel(Evaluator):
         self.mode = mode
         self.step = step
         self.substrate_fn = substrate_fn
+        self.postprocess = postprocess
 
     def auc(self, arr):
         """Returns normalized Area Under Curve of the array."""
@@ -30,7 +31,7 @@ class InsDel(Evaluator):
         # return (arr.sum(-1).sum(-1) - arr[1] / 2 - arr[-1] / 2) / (arr.shape[1] - 1)
         return (arr.sum(-1) - arr[:, 0] / 2 - arr[:, -1] / 2) / (arr.shape[1] - 1)
 
-    def forward(self, X, Z, verbose=0, save_to=None, return_dict=False, model_prob_func=lambda x:x):
+    def forward(self, X, Z, verbose=0, save_to=None, return_dict=False):
         """Run metric on one image-saliency pair.
             Args:
                 X = img_tensor (Tensor): normalized image tensor. (bsz, n_channel, img_dim1, img_dim2)
@@ -47,8 +48,9 @@ class InsDel(Evaluator):
         explanation = Z
         bsz, n_channel, img_dim1, img_dim2 = X.shape
         HW = img_dim1 * img_dim2
-        outputs = self.model(img_tensor)
-        pred = model_prob_func(outputs)
+        pred = self.model(img_tensor)
+        if self.postprocess is not None:
+            pred = self.postprocess(pred)
         top, c = torch.max(pred, 1)
         # c = c.cpu().numpy()[0]
         n_steps = (HW + self.step - 1) // self.step
@@ -74,9 +76,11 @@ class InsDel(Evaluator):
         t_r = explanation.reshape(bsz, -1, HW)
         salient_order = torch.argsort(t_r, dim=-1)
         salient_order = torch.flip(salient_order, [1, 2])
-        for i in tqdm(range(n_steps+1)):
-            outputs = self.model(start)
-            pred = model_prob_func(outputs)
+        for i in range(n_steps+1):
+            pred = self.model(start)
+            if self.postprocess is not None:
+                pred = self.postprocess(pred)
+            pred = torch.softmax(pred, dim=-1)
             # pr, cl = torch.topk(pred, 2)
             # if verbose == 2:
             #     print('{}: {:.3f}'.format(get_class_name(cl[0][0]), float(pr[0][0])))

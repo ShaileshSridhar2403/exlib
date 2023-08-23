@@ -5,7 +5,7 @@ import numpy as np
 from lime import lime_image
 from .common import AttributionOutput, torch_img_to_np, np_to_torch_img
 
-def batch_predict_from_torch(model, task, preprocess=None): 
+def batch_predict_from_torch(model, task, preprocess=None, postprocess=None): 
     """ Batch predict function for a pytorch model """
     def batch_predict(inp):
         model.eval()
@@ -17,6 +17,8 @@ def batch_predict_from_torch(model, task, preprocess=None):
         inp = inp.to(device)
 
         pred = model(inp)
+        if postprocess is not None:
+            pred = postprocess(pred)
         if task == 'reg': 
             output = pred
         elif task == 'clf': 
@@ -27,8 +29,10 @@ def batch_predict_from_torch(model, task, preprocess=None):
 #         assert False
     return batch_predict
 
-def explain_torch_reg_with_lime(X, model, label, normalize=False, LimeImageExplainerKwargs={}, 
-                                explain_instance_kwargs={}, get_image_and_mask_kwargs={}): 
+def explain_torch_reg_with_lime(X, model, label, postprocess=None,
+                                normalize=False, LimeImageExplainerKwargs={}, 
+                                explain_instance_kwargs={}, 
+                                get_image_and_mask_kwargs={}): 
     """
     Explain a pytorch model with LIME. 
 
@@ -62,13 +66,20 @@ def explain_torch_reg_with_lime(X, model, label, normalize=False, LimeImageExpla
             X = X*(X_max - X_min) + X_min # undo shift
         return X
         
-    f = batch_predict_from_torch(model, 'reg', preprocess=p)
+    f = batch_predict_from_torch(model, 'reg', preprocess=p, 
+                                 postprocess=postprocess)
     
     masks,lime_exps = [],[]
-    for X0_np in X_np: 
+    for i, X0_np in enumerate(X_np): 
         explainer = lime_image.LimeImageExplainer(**LimeImageExplainerKwargs)
         explanation = explainer.explain_instance(X0_np, f, **explain_instance_kwargs)
-        img,mask = explanation.get_image_and_mask(explanation.top_labels[0] if label is None else label, 
+        # print('label', label)
+        # print('explanation.top_labels[0]', explanation.top_labels[0])
+        # import pdb
+        # pdb.set_trace()
+        # print('explanation', explanation)
+        img,mask = explanation.get_image_and_mask(explanation.top_labels[0] 
+                                                  if label is None else label[i].cpu().numpy().item(), 
                                                   **get_image_and_mask_kwargs)
 
         masks.append(mask)
