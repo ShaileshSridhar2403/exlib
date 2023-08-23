@@ -30,7 +30,7 @@ class InsDel(Evaluator):
         # return (arr.sum(-1).sum(-1) - arr[1] / 2 - arr[-1] / 2) / (arr.shape[1] - 1)
         return (arr.sum(-1) - arr[:, 0] / 2 - arr[:, -1] / 2) / (arr.shape[1] - 1)
 
-    def forward(self, X, Z, verbose=0, save_to=None, return_dict=False):
+    def forward(self, X, Z, verbose=0, save_to=None, return_dict=False, model_prob_func=lambda x:x):
         """Run metric on one image-saliency pair.
             Args:
                 X = img_tensor (Tensor): normalized image tensor. (bsz, n_channel, img_dim1, img_dim2)
@@ -47,9 +47,8 @@ class InsDel(Evaluator):
         explanation = Z
         bsz, n_channel, img_dim1, img_dim2 = X.shape
         HW = img_dim1 * img_dim2
-        outputs = self.model(img_tensor, epoch=1)
-        pred = outputs.logits
-        pred = torch.softmax(pred, dim=-1)
+        outputs = self.model(img_tensor)
+        pred = model_prob_func(outputs)
         top, c = torch.max(pred, 1)
         # c = c.cpu().numpy()[0]
         n_steps = (HW + self.step - 1) // self.step
@@ -76,9 +75,8 @@ class InsDel(Evaluator):
         salient_order = torch.argsort(t_r, dim=-1)
         salient_order = torch.flip(salient_order, [1, 2])
         for i in tqdm(range(n_steps+1)):
-            outputs = self.model(start, epoch=1)
-            pred = outputs.logits
-            pred = torch.softmax(pred, dim=-1)
+            outputs = self.model(start)
+            pred = model_prob_func(outputs)
             # pr, cl = torch.topk(pred, 2)
             # if verbose == 2:
             #     print('{}: {:.3f}'.format(get_class_name(cl[0][0]), float(pr[0][0])))

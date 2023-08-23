@@ -42,16 +42,17 @@ def explain_torch_reg_with_lime(X, model, label, normalize=False, LimeImageExpla
     # get_image_and_mask arguments
     positive_only=True, negative_only=False, hide_rest=False, num_features=5, min_weight=0.0
     """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     collapse = (X.ndim == 4) and (X.size(1) == 1) # check if single or RGB channel
     X_min, X_max = X.min(), X.max()
     if normalize: 
         X = (X - X_min)/(X_max-X_min) # shift to 0-1 range
-    X_np = torch_img_to_np(X) # rearrange dimensions for numpy
+    X_np = torch_img_to_np(X.cpu()) # rearrange dimensions for numpy
     if collapse: 
         X_np = X_np[:,:,:,0] # lime needs no singleton last dimension
         
     def p(X): 
-        X = np_to_torch_img(X)
+        X = np_to_torch_img(X).to(device)
         if collapse: 
             X = X[:,0:1,:,:] # even though lime needs no singleton last dimension in its input, 
             # for an odd reason they put back 3 of them to match RGB format before passing 

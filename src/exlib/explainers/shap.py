@@ -3,10 +3,9 @@ import shap
 from .common import AttributionOutput, torch_img_to_np, np_to_torch_img
 
 def explain_torch_with_shap(X, model, mask_value, explainer_kwargs, shap_kwargs): 
-    X_np = torch_img_to_np(X) 
-    masker = shap.maskers.Image(mask_value, X_np[0].shape)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    X_np = torch_img_to_np(X.cpu())
+    masker = shap.maskers.Image(mask_value, X_np[0].shape)
 
     def f(X): 
         model.to(device)

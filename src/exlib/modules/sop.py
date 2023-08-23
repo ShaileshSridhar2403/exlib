@@ -409,7 +409,9 @@ class SoP(PreTrainedModel):
                 if sum([f'{self.finetune_layers[i]}.{self.finetune_layers_idxs[i]}' in name for i in range(len(self.finetune_layers))]) == 0: # the name doesn't match any finetune layers
                     param.requires_grad = False
 
-    def forward(self, inputs, masks=None, epoch=0, mask_batch_size=16):
+    def forward(self, inputs, masks=None, epoch=-1, mask_batch_size=16):
+        if epoch == -1:
+            epoch = self.num_heads
         if self.model_type == 'image':
             bsz, num_channel, img_dim1, img_dim2 = inputs.shape
         else:
