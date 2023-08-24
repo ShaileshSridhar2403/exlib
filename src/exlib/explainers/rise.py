@@ -30,7 +30,7 @@ class TorchImageRISE(TorchAttribution):
 
         self.masks = np.empty((N, *self.input_size))
 
-        for i in tqdm(range(N), desc='Generating filters'):
+        for i in range(N):
             # Random shifts
             x = np.random.randint(0, cell_size[0])
             y = np.random.randint(0, cell_size[1])

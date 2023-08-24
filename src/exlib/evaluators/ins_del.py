@@ -4,11 +4,11 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import numpy as np
 from scipy.ndimage.filters import gaussian_filter
-from .attributions import Evaluator
+from .common import Evaluator
 
 class InsDel(Evaluator):
 
-    def __init__(self, model, mode, step, substrate_fn, postprocess):
+    def __init__(self, model, mode, step, substrate_fn, postprocess=None):
         """Create deletion/insertion metric instance.
         Args:
             model (nn.Module): Black-box model being explained.
@@ -16,14 +16,12 @@ class InsDel(Evaluator):
             step (int): number of pixels modified per one iteration.
             substrate_fn (func): a mapping from old pixels to new pixels.
         """
-        super(InsDel, self).__init__(None)
+        super(InsDel, self).__init__(model, postprocess)
         
         assert mode in ['del', 'ins']
-        self.model = model
         self.mode = mode
         self.step = step
         self.substrate_fn = substrate_fn
-        self.postprocess = postprocess
 
     def auc(self, arr):
         """Returns normalized Area Under Curve of the array."""

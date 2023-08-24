@@ -245,7 +245,6 @@ class AggregatePerClassAttentionLayer(nn.Module):
         self.num_heads = num_heads
         self.multihead_attn = nn.MultiheadAttention(hidden_dim, num_heads, 
                                                     batch_first=True)
-        print('loaded mha')
         self.sparsemax = Sparsemax(dim=-1)
         self.aggr_type = aggr_type
         if aggr_type not in ['joint', 'independent']:
@@ -609,15 +608,24 @@ class SoP(PreTrainedModel):
         
         # print('masks_weights_used', masks_weights_used.shape)
         _, predicted = torch.max(weighted_output.data, -1)
-        masks_mult = input_mask_weights.unsqueeze(2) * \
-            output_mask_weights.unsqueeze(-1).unsqueeze(-1) # bsz, n_masks, n_cls, img_dim, img_dim
-        masks_aggr = masks_mult.sum(1) # bsz, n_masks, img_dim, img_dim
-        masks_aggr_pred_cls = masks_aggr[range(bsz), predicted].unsqueeze(1)
-        max_mask_indices = output_mask_weights.max(2).indices.max(1).indices
-        masks_max_pred_cls = masks_mult[range(bsz),max_mask_indices,predicted].unsqueeze(1)
+        # print('input_mask_weights', input_mask_weights.shape)
+        # print('output_mask_weights', output_mask_weights.shape)
+        # import pdb
+        # pdb.set_trace()
         
-
         if self.return_tuple:
+            # todo: debug for segmentation
+            if self.pred_type == 'sequence':
+                masks_mult = input_mask_weights.unsqueeze(2) * \
+                output_mask_weights.unsqueeze(-1).unsqueeze(-1) # bsz, n_masks, n_cls, img_dim, img_dim
+                masks_aggr = masks_mult.sum(1) # bsz, n_masks, img_dim, img_dim
+                masks_aggr_pred_cls = masks_aggr[range(bsz), predicted].unsqueeze(1)
+                max_mask_indices = output_mask_weights.max(2).indices.max(1).indices
+                masks_max_pred_cls = masks_mult[range(bsz),max_mask_indices,predicted].unsqueeze(1)
+            else:
+                masks_aggr_pred_cls = None
+                masks_max_pred_cls = None
+
             return AttributionOutputSoP(masks_aggr_pred_cls,
                                         weighted_output,
                                         outputs,

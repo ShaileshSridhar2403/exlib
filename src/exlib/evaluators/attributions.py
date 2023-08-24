@@ -1,17 +1,8 @@
 import torch
 import torch.nn as nn
-
-class Evaluator(nn.Module): 
-	""" Explaination methods that create feature attributions should follow 
-	this signature. """
-	def __init__(self, model): 
-		super(Evaluator, self).__init__() 
-		self.model = model
-
-	def forward(self, X, Z): 
-		""" Given a minibatch of examples X and feature attributions Z, 
-		evaluate the quality of the feature attribution. """
-		raise NotImplementedError()
+from .common import Evaluator
+from .ins_del import InsDel
+from .comp_suff import CompSuff
 
 class NNZ(Evaluator): 
 	def __init__(self): 
