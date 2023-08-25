@@ -1,2 +1,2 @@
 from .mus import MuS, SimpleMuS, VisionMuS
-from .sop import SoP
+from .sop import SOP

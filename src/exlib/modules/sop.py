@@ -17,7 +17,7 @@ import copy
 # sys.path.append(str(path_root))
 from collections import namedtuple
 
-AttributionOutputSoP = namedtuple("AttributionOutputSoP", 
+AttributionOutputSOP = namedtuple("AttributionOutputSOP", 
                                   ["attributions", 
                                    "logits",
                                    "logits_all",
@@ -289,7 +289,7 @@ class AggregatePerClassAttentionLayer(nn.Module):
         return attn_outputs, mask
 
 
-class SoP(PreTrainedModel):
+class SOP(PreTrainedModel):
     def __init__(self, 
                  config,
                  blackbox_model,
@@ -626,7 +626,7 @@ class SoP(PreTrainedModel):
                 masks_aggr_pred_cls = None
                 masks_max_pred_cls = None
 
-            return AttributionOutputSoP(masks_aggr_pred_cls,
+            return AttributionOutputSOP(masks_aggr_pred_cls,
                                         weighted_output,
                                         outputs,
                                         input_mask_weights,
