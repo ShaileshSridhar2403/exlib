@@ -18,11 +18,11 @@ import copy
 from collections import namedtuple
 
 AttributionOutputSOP = namedtuple("AttributionOutputSOP", 
-                                  ["attributions", 
-                                   "logits",
+                                  ["logits",
                                    "logits_all",
                                    "seg_weights",
                                    "mask_weights",
+                                   "attributions", 
                                    "attributions_max"])
 
 
@@ -626,11 +626,11 @@ class SOP(PreTrainedModel):
                 masks_aggr_pred_cls = None
                 masks_max_pred_cls = None
 
-            return AttributionOutputSOP(masks_aggr_pred_cls,
-                                        weighted_output,
+            return AttributionOutputSOP(weighted_output,
                                         outputs,
                                         input_mask_weights,
                                         output_mask_weights,
+                                        masks_aggr_pred_cls,
                                         masks_max_pred_cls)
         else:
             return weighted_output
