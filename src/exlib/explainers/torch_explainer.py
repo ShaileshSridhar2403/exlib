@@ -7,6 +7,7 @@ from .common import TorchAttribution
 from .lime import explain_torch_reg_with_lime
 from .shap import explain_torch_with_shap
 from .rise import TorchImageRISE
+from .intgrad import explain_torch_with_intgrad
 
 # The default behavior for an attribution method is to 
 # provide an explanation for the top predicted class. 
@@ -55,3 +56,13 @@ class TorchImageSHAP(TorchAttribution):
 		return explain_torch_with_shap(X, self.model, self.mask_value, 
 			self.explainer_kwargs, self.shap_kwargs, postprocess=self.postprocess)
 		#max_evals=500, batch_size=50, outputs=shap.Explanation.argsort.flip[:1] if labels is None else labels)
+
+class TorchImageIntGrad(TorchAttribution):
+    def __init__(self, model, postprocess=None):
+        super(TorchImageIntGrad, self).__init__(model, postprocess)
+
+    def forward(self, X, labels=None):
+        return explain_torch_with_intgrad(X, self.model, labels=labels)
+
+
+
