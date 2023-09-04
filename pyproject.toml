@@ -8,6 +8,8 @@ dependencies = [
   'lime >= 0.2',
   'shap >= 0.42',
   'torch >= 2.0',
+  'grad-cam >= 1.4.8',
+  'jsonlines >= 3.1.0'
 ]
 description = "Tools for explainability"
 readme = "README.md"

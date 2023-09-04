@@ -2,6 +2,7 @@ from __future__ import division
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import PreTrainedModel
 import collections.abc
 from functools import partial
@@ -20,10 +21,53 @@ from collections import namedtuple
 AttributionOutputSOP = namedtuple("AttributionOutputSOP", 
                                   ["logits",
                                    "logits_all",
-                                   "seg_weights",
+                                   "pooler_outputs_all",
+                                   "masks",
                                    "mask_weights",
                                    "attributions", 
-                                   "attributions_max"])
+                                   "attributions_max",
+                                   "flat_masks"])
+
+
+def compress_masks(masks, masks_weights, min_size=0):
+
+    def compress_single_masks(masks, masks_weights, min_size):
+        num_masks, img_dim_1, img_dim_2 = masks.shape
+        masks_bool = (masks > 0).int()
+
+        # data_count = masks_bool.sum(dim=-1).sum(dim=-1)
+        # _, sorted_indices = torch.sort(data_count, descending=True)
+        sorted_weights, sorted_indices = torch.sort(masks_weights, descending=True)
+        sorted_indices = sorted_indices[sorted_weights > 0]
+
+        masks_bool = masks_bool[sorted_indices]  # sorted masks
+
+        masks = torch.zeros(masks_bool.shape[-2], 
+                            masks_bool.shape[-1]).to(masks.device)
+
+        count = 1
+        for mask in masks_bool:
+            new_mask = mask.bool() ^ (mask.bool() & masks.bool())
+            if torch.sum(new_mask) >= min_size:
+                masks[new_mask] = count
+                count += 1
+
+        masks = masks - 1
+        masks = masks.int()
+        masks[masks == -1] = torch.max(masks) + 1
+
+        return masks
+
+    if len(masks.shape) == 4:
+        bsz, num_masks, img_dim_1, img_dim_2 = masks.shape
+        new_masks = []
+        for i in range(len(masks)):
+            compressed_mask = compress_single_masks(masks[i], masks_weights[i], 
+                                                    min_size)
+            new_masks.append(compressed_mask)
+        return torch.stack(new_masks)
+    else:  # 3
+        return compress_single_masks(masks, masks_weights, min_size)
 
 
 def _get_inverse_sqrt_with_separate_heads_schedule_with_warmup_lr_lambda(
@@ -225,7 +269,7 @@ class SparsemaxMaskExplanationLayer(nn.Module):
             for head_j in range(num_heads_use):
                 _, attn_weights_j = self.multihead_attns[head_j](query, key_value, key_value)
                 attn_weights.append(attn_weights_j)
-            attn_weights = torch.cat(attn_weights, dim=1)
+            attn_weights = torch.stack(attn_weights, dim=1)
         
         # import pdb
         # pdb.set_trace()
@@ -401,20 +445,34 @@ class SOP(PreTrainedModel):
             for name, param in self.blackbox_model.named_parameters():
                 if sum([ft_layer in name for ft_layer in self.finetune_layers]) == 0: # the name doesn't match any finetune layers
                     param.requires_grad = False
+                else:
+                    param.requires_grad = True
         else:
             self.class_weights = copy.deepcopy(getattr(self.blackbox_model, self.finetune_layers[0])[self.finetune_layers_idxs[0]].weight)
             # Freeze the frozen module
             for name, param in self.blackbox_model.named_parameters():
                 if sum([f'{self.finetune_layers[i]}.{self.finetune_layers_idxs[i]}' in name for i in range(len(self.finetune_layers))]) == 0: # the name doesn't match any finetune layers
                     param.requires_grad = False
+                else:
+                    param.requires_grad = True
 
-    def forward(self, inputs, masks=None, epoch=-1, mask_batch_size=16):
+    def forward(self, 
+                inputs, 
+                token_type_ids=None, 
+                attention_mask=None, 
+                masks=None, 
+                epoch=-1, 
+                mask_batch_size=16):
+        # print('inputs', inputs.shape)
         if epoch == -1:
             epoch = self.num_heads
         if self.model_type == 'image':
             bsz, num_channel, img_dim1, img_dim2 = inputs.shape
         else:
+            attention_mask = attention_mask.float()
+            attention_mask.requires_grad = True
             bsz, seq_len = inputs.shape
+            num_channel = 1
         
         # Input masks
         # print('inputs.shape', inputs.shape)
@@ -427,6 +485,12 @@ class SOP(PreTrainedModel):
             else:
                 centered_inputs = centered_inputs
             projected_inputs = self.projection(centered_inputs)
+
+            if not isinstance(projected_inputs, torch.Tensor):
+                projected_inputs = projected_inputs['last_hidden_state']
+            # import pdb
+            # pdb.set_trace()
+            # print('projected_inputs', projected_inputs.shape)
             # print('projected_inputs', projected_inputs)
             # import pdb
             # pdb.set_trace()
@@ -445,19 +509,32 @@ class SOP(PreTrainedModel):
             #     projected_inputs = (projected_inputs - projected_inputs.mean(-2).unsqueeze(-2)) * 1 / projected_inputs.mean(-2).unsqueeze(-2) / (- self.mean_center_scale)
 
             if self.num_masks_max != -1:
-                input_dropout_idxs = torch.randperm(projected_inputs.shape[1])[:self.num_masks_max]
-                projected_query = projected_inputs[:, input_dropout_idxs]
+                if self.model_type == 'image':
+                    input_dropout_idxs = torch.randperm(projected_inputs.shape[1])[:self.num_masks_max]
+                    projected_query = projected_inputs[:, input_dropout_idxs]
+                else:
+                    input_dropout_idxs = torch.randperm(projected_inputs.shape[1]).to(attention_mask.device)
+                    # only select ones where attention_mask is 1, if it's text
+                    attention_mask_mult = attention_mask * input_dropout_idxs
+                    input_dropout_idxs = torch.argsort(attention_mask_mult, dim=-1).flip(-1)[:, :self.num_masks_max]
+                    batch_indices = torch.arange(bsz).unsqueeze(1).repeat(1, input_dropout_idxs.shape[-1])
+                    selected_projected_inputs = projected_inputs[batch_indices, input_dropout_idxs]
+                    projected_query = selected_projected_inputs
             else:
                 projected_query = projected_inputs
             input_mask_weights = self.input_attn(projected_query, projected_inputs, epoch=epoch)
             # print('input_mask_weights a', input_mask_weights.shape)
-            # import pdb
-            # pdb.set_trace()
-            num_patches = ((self.image_size[0] - self.attn_patch_size) // self.attn_stride_size + 1, 
-                        (self.image_size[1] - self.attn_patch_size) // self.attn_stride_size + 1)
-            input_mask_weights = input_mask_weights.reshape(-1, 1, num_patches[0], num_patches[1])
-            input_mask_weights = self.projection_up(input_mask_weights, output_size=torch.Size([input_mask_weights.shape[0], 1, img_dim1, img_dim2]))
-            input_mask_weights = input_mask_weights.view(bsz, -1, img_dim1, img_dim2)
+            
+            if self.model_type == 'image':
+                num_patches = ((self.image_size[0] - self.attn_patch_size) // self.attn_stride_size + 1, 
+                            (self.image_size[1] - self.attn_patch_size) // self.attn_stride_size + 1)
+                input_mask_weights = input_mask_weights.reshape(-1, 1, num_patches[0], num_patches[1])
+                input_mask_weights = self.projection_up(input_mask_weights, output_size=torch.Size([input_mask_weights.shape[0], 1, img_dim1, img_dim2]))
+                input_mask_weights = input_mask_weights.view(bsz, -1, img_dim1, img_dim2)
+            else:
+                # import pdb
+                # pdb.set_trace()
+                input_mask_weights = input_mask_weights.squeeze(1)
             input_mask_weights = torch.clip(input_mask_weights, max=1.0)
 
             # num_patches = (self.image_size[0] // self.attn_patch_size, 
@@ -492,10 +569,18 @@ class SOP(PreTrainedModel):
                     )
                     pooler_i = output_i.pooler_output
                 else:
-                    output_i = self.blackbox_model(
-                        masked_output_0[i:i+mask_batch_size],
-                        output_hidden_states=True
-                    )
+                    if self.model_type == 'image':
+                        output_i = self.blackbox_model(
+                            masked_output_0[i:i+mask_batch_size],
+                            output_hidden_states=True
+                        )
+                    else:
+                        output_i = self.blackbox_model(
+                            masked_output_0[i:i+mask_batch_size],
+                            token_type_ids=token_type_ids,
+                            attention_mask=attention_mask,
+                            output_hidden_states=True
+                        )
                     pooler_i = output_i.hidden_states[-1][:,0]
                 # logits_i = output_i.logits
                 
@@ -528,10 +613,14 @@ class SOP(PreTrainedModel):
             # (bsz, num_new_masks, num_masks, img_dim1, img_dim2)
             input_mask_weights = new_masks.sum(2)  # if one mask has it, then have it
             
-        scale_factor = 1.0 / input_mask_weights.reshape(bsz, -1, 
-                                                        img_dim1 * img_dim2).max(dim=-1).values
-        input_mask_weights = input_mask_weights * scale_factor.view(bsz, -1,1,1)
-        
+        if self.model_type == 'image':
+            scale_factor = 1.0 / input_mask_weights.reshape(bsz, -1, 
+                                                            img_dim1 * img_dim2).max(dim=-1).values
+            input_mask_weights = input_mask_weights * scale_factor.view(bsz, -1,1,1)
+        else:
+            scale_factor = 1.0 / input_mask_weights.max(dim=-1).values
+            input_mask_weights = input_mask_weights * scale_factor.view(bsz, -1,1)
+
             # todo: Can we simplify the above to be dot product?
         # print('input_mask_weights final', input_mask_weights)
         # print('input_mask_weights c', input_mask_weights.shape)
@@ -548,20 +637,52 @@ class SOP(PreTrainedModel):
             dropout_mask = torch.ones(bsz, input_mask_weights.shape[1])
         
         selected_input_mask_weights = input_mask_weights[dropout_mask.bool()].clone()
-        selected_input_mask_weights = selected_input_mask_weights.view(bsz, 
-                                                                       -1, 
-                                                                       img_dim1, 
-                                                                       img_dim2)
-        
-        # masked_output = inputs.unsqueeze(1) * input_mask_weights.unsqueeze(2)   # (bsz, seq_len, num_channel, img_dim1, img_dim2)
-        selected_masked_inputs = inputs.unsqueeze(1) * selected_input_mask_weights.unsqueeze(2)
-        selected_masked_inputs = selected_masked_inputs.view(-1, 
-                                                             num_channel, 
-                                                             img_dim1, 
-                                                             img_dim2)
+
+        if self.model_type == 'image':
+            selected_input_mask_weights = selected_input_mask_weights.view(bsz, 
+                                                                        -1, 
+                                                                        img_dim1, 
+                                                                        img_dim2)
+            
+            # masked_output = inputs.unsqueeze(1) * input_mask_weights.unsqueeze(2)   # (bsz, seq_len, num_channel, img_dim1, img_dim2)
+            selected_masked_inputs = inputs.unsqueeze(1) * \
+                selected_input_mask_weights.unsqueeze(2)
+            selected_masked_inputs = selected_masked_inputs.view(-1, 
+                                                                num_channel, 
+                                                                img_dim1, 
+                                                                img_dim2)
+        else:
+            selected_input_mask_weights = selected_input_mask_weights.reshape(bsz, 
+                                                                        -1, 
+                                                                        seq_len)
+            selected_masked_inputs = inputs.unsqueeze(1) \
+                .expand(selected_input_mask_weights.shape).reshape(-1, 
+                                                                seq_len)  # (bsz, n_masks, seq_len)
+            
+            selected_token_type_ids = token_type_ids.unsqueeze(1) \
+                .expand(selected_input_mask_weights.shape).reshape(-1, 
+                                                                seq_len)
+            # selected_attention_mask = attention_mask.unsqueeze(1) * selected_input_mask_weights
+            selected_attention_mask = attention_mask.unsqueeze(1) \
+                .expand(selected_input_mask_weights.shape)
+            selected_attention_mask = selected_attention_mask.reshape(-1, 
+                                                                      seq_len)
+            # import pdb
+            # pdb.set_trace()
+            mask_embed = self.projection(torch.tensor([0]).int().to(inputs.device))
+            # print('mask_embed', mask_embed.shape)
+            # inputs_embeds = projected_inputs.unsqueeze(1) * selected_input_mask_weights.unsqueeze(-1)
+            inputs_embeds = projected_inputs.unsqueeze(1) * \
+                selected_input_mask_weights.unsqueeze(-1) + \
+                mask_embed.view(1,1,1,-1) * (1 - selected_input_mask_weights.unsqueeze(-1))
+            # print('inputs_embeds', inputs_embeds.shape)
+            inputs_embeds = inputs_embeds.reshape(-1, 
+                                                  inputs_embeds.shape[-2], 
+                                                  inputs_embeds.shape[-1])
 
         outputs = []
         pooler_outputs = []
+        
         for i in range(0, selected_masked_inputs.shape[0], mask_batch_size):
             if self.pooler:
                 output_i = self.blackbox_model(
@@ -569,11 +690,22 @@ class SOP(PreTrainedModel):
                 )
                 pooler_i = output_i.pooler_output
             else:
-                output_i = self.blackbox_model(
-                    selected_masked_inputs[i:i+mask_batch_size],
-                    output_hidden_states=True
-                )
+                if self.model_type == 'image':
+                    output_i = self.blackbox_model(
+                        selected_masked_inputs[i:i+mask_batch_size],
+                        output_hidden_states=True
+                    )
+                else:
+                    output_i = self.blackbox_model(
+                        # selected_masked_inputs[i:i+mask_batch_size],
+                        token_type_ids=selected_token_type_ids[i:i+mask_batch_size],
+                        attention_mask=selected_attention_mask[i:i+mask_batch_size],
+                        inputs_embeds=inputs_embeds[i:i+mask_batch_size],
+                        output_hidden_states=True
+                    )
                 pooler_i = output_i.hidden_states[-1][:,0]
+            # import pdb
+            # pdb.set_trace()
             logits_i = output_i.logits
             outputs.append(logits_i)
             pooler_outputs.append(pooler_i)
@@ -605,9 +737,10 @@ class SOP(PreTrainedModel):
                                                                     key_value=key_value, 
                                                                     to_attend=outputs)
 
-        
+        # import pdb
+        # pdb.set_trace()
         # print('masks_weights_used', masks_weights_used.shape)
-        _, predicted = torch.max(weighted_output.data, -1)
+        
         # print('input_mask_weights', input_mask_weights.shape)
         # print('output_mask_weights', output_mask_weights.shape)
         # import pdb
@@ -615,22 +748,27 @@ class SOP(PreTrainedModel):
         
         if self.return_tuple:
             # todo: debug for segmentation
-            if self.pred_type == 'sequence':
+            if not self.training and self.pred_type == 'sequence' and self.model_type == 'image':
+                _, predicted = torch.max(weighted_output.data, -1)
                 masks_mult = input_mask_weights.unsqueeze(2) * \
                 output_mask_weights.unsqueeze(-1).unsqueeze(-1) # bsz, n_masks, n_cls, img_dim, img_dim
                 masks_aggr = masks_mult.sum(1) # bsz, n_masks, img_dim, img_dim
                 masks_aggr_pred_cls = masks_aggr[range(bsz), predicted].unsqueeze(1)
                 max_mask_indices = output_mask_weights.max(2).indices.max(1).indices
                 masks_max_pred_cls = masks_mult[range(bsz),max_mask_indices,predicted].unsqueeze(1)
+                flat_masks = compress_masks(input_mask_weights, output_mask_weights)
             else:
                 masks_aggr_pred_cls = None
                 masks_max_pred_cls = None
+                flat_masks = None
 
             return AttributionOutputSOP(weighted_output,
                                         outputs,
+                                        pooler_outputs,
                                         input_mask_weights,
                                         output_mask_weights,
                                         masks_aggr_pred_cls,
-                                        masks_max_pred_cls)
+                                        masks_max_pred_cls,
+                                        flat_masks)
         else:
             return weighted_output

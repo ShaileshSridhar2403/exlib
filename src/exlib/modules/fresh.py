@@ -72,7 +72,8 @@ class FRESH(PreTrainedModel):
                  return_tuple=False,
                  postprocess_attn=None,
                  postprocess_logits=None,
-                 projection_layer=None
+                 projection_layer=None,
+                 rationale_len=0.2
                  ):
         if config is not None:
             super().__init__(config)
@@ -83,6 +84,7 @@ class FRESH(PreTrainedModel):
         self.return_tuple = return_tuple
         self.postprocess_attn = postprocess_attn
         self.postprocess_logits = postprocess_logits
+        self.rationale_len = rationale_len
 
         if model_type == 'image':
             self.image_size = config.image_size if isinstance(config.image_size, 
@@ -119,7 +121,7 @@ class FRESH(PreTrainedModel):
 
         # attention - new parts
         # input
-        self.input_attn = TopKAttentionLayer(k=0.2)
+        self.input_attn = TopKAttentionLayer(k=rationale_len)
 
         if projection_layer is not None:
             self.projection = copy.deepcopy(projection_layer)

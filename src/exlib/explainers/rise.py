@@ -22,6 +22,7 @@ class TorchImageRISE(TorchAttribution):
         self.generate_masks(N, s, p1)
 
     def generate_masks(self, N, s, p1, savepath='masks.npy'):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         cell_size = np.ceil(np.array(self.input_size) / s)
         up_size = (s + 1) * cell_size
 
@@ -41,41 +42,39 @@ class TorchImageRISE(TorchAttribution):
         self.masks = self.masks.reshape(-1, 1, *self.input_size)
         # np.save(savepath, self.masks)
         self.masks = torch.from_numpy(self.masks).float()
-        self.masks = self.masks.cuda()
+        self.masks = self.masks.to(device)
         self.N = N
         self.p1 = p1
 
-    def load_masks(self, filepath):
-        self.masks = np.load(filepath)
-        self.masks = torch.from_numpy(self.masks).float().cuda()
-        self.N = self.masks.shape[0]
-
     def forward(self, x, label=None):
-        # Apply array of filters to the image
-        N = self.N
-        B, C, H, W = x.size()
-        stack = torch.mul(self.masks.view(N, 1, H, W), x.data.view(B * C, H, W))
-        stack = stack.view(N * B, C, H, W)
-        stack = stack
+        # Apply array of filters to the image]
+        # print('RISE')
+        self.model.eval()
+        with torch.no_grad():
+            N = self.N
+            B, C, H, W = x.size()
+            stack = torch.mul(self.masks.view(N, 1, H, W), x.data.view(B * C, H, W))
+            stack = stack.view(N * B, C, H, W)
+            stack = stack
 
-        #p = nn.Softmax(dim=1)(model(stack)) in batches
-        p = []
-        for i in range(0, N*B, self.gpu_batch):
-            pred = self.model(stack[i:min(i + self.gpu_batch, N*B)])
-            if self.postprocess is not None:
-                pred = self.postprocess(pred)
-            p.append(pred)
-        p = torch.cat(p)
-        if label is None:
-            # if no label, then explain the top class
-            pred_x = self.model(x)
-            if self.postprocess is not None:
-                pred_x = self.postprocess(pred_x)
-            label = torch.argmax(pred_x, dim=-1)
-        CL = p.size(1)
-        p = p.view(N, B, CL)
-        sal = torch.matmul(p.permute(1, 2, 0), self.masks.view(N, H * W))
-        sal = sal.view(B, CL, H, W)
+            #p = nn.Softmax(dim=1)(model(stack)) in batches
+            p = []
+            for i in range(0, N*B, self.gpu_batch):
+                pred = self.model(stack[i:min(i + self.gpu_batch, N*B)])
+                if self.postprocess is not None:
+                    pred = self.postprocess(pred)
+                p.append(pred)
+            p = torch.cat(p)
+            if label is None:
+                # if no label, then explain the top class
+                pred_x = self.model(x)
+                if self.postprocess is not None:
+                    pred_x = self.postprocess(pred_x)
+                label = torch.argmax(pred_x, dim=-1)
+            CL = p.size(1)
+            p = p.view(N, B, CL)
+            sal = torch.matmul(p.permute(1, 2, 0), self.masks.view(N, H * W))
+            sal = sal.view(B, CL, H, W)
         
         return AttributionOutput(sal[range(B), label], sal)
 
