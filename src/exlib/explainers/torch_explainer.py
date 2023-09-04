@@ -62,7 +62,8 @@ class TorchImageIntGrad(TorchAttribution):
         super(TorchImageIntGrad, self).__init__(model, postprocess)
 
     def forward(self, X, labels=None):
-        return explain_torch_with_intgrad(X, self.model, labels=labels)
+        return explain_torch_with_intgrad(X, self.model, labels=labels, 
+										  postprocess=self.postprocess)
 
 
 

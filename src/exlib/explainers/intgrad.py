@@ -7,7 +7,8 @@ def explain_torch_with_intgrad(X, model,
                                X0 = None,
                                labels = None,
                                num_steps = 100,
-                               progress_bar = False):
+                               progress_bar = False,
+                               postprocess = None):
     """
     Explain a classification model with Integrated Gradients.
     """
@@ -21,6 +22,8 @@ def explain_torch_with_intgrad(X, model,
     if labels is None:
         with torch.no_grad():
             y = model(X)
+        if postprocess:
+            y = postprocess(y)
         labels = y.argmax(dim=1)
 
     # The integrated gradients that we accumulate
@@ -32,6 +35,8 @@ def explain_torch_with_intgrad(X, model,
         Xk = X0 + ak * (X - X0)
         Xk.requires_grad_()
         y = model(Xk)
+        if postprocess:
+            y = postprocess(y)
         assert y.ndim == 2 # Because this is batched classification
 
         y_targets = y[:, labels]
