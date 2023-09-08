@@ -32,9 +32,6 @@ MVTEC_CATEGORIES = [
     "zipper",
 ]
 
-mvtec_preprocess_transforms = transforms.Compose([
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-])
 
 class MVTec(Dataset):
   def __init__(self,
@@ -44,8 +41,7 @@ class MVTec(Dataset):
                image_size = 256, # Loads at (3,256,256) image
                good_value = 0,
                anom_value = 1,
-               image_transforms = None,
-               mask_transforms = None,
+               data_type = "float", # "float" or "uint8"
                download = False):
     if download:
       raise ValueError("download not implemented")
@@ -68,17 +64,16 @@ class MVTec(Dataset):
 
     self.image_size = image_size
 
-    self.image_transforms = image_transforms if image_transforms is not None else \
-        transforms.Compose([
-          transforms.Resize(image_size, antialias=True),
-          # transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ])
-
-    self.mask_transforms = mask_transforms if mask_transforms is not None else \
-        transforms.Compose([
+    self.image_transforms = transforms.Compose([
           transforms.Resize(image_size, antialias=True),
         ])
 
+    self.mask_transforms = transforms.Compose([
+          transforms.Resize(image_size, antialias=True),
+        ])
+
+    assert data_type in ["float", "uint8"]
+    self.data_type = data_type
     self.good_value = good_value
     self.anom_value = anom_value
 
@@ -90,6 +85,9 @@ class MVTec(Dataset):
     image_np = cv2.cvtColor(cv2.imread(image_file, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
     image = torch.tensor(image_np.transpose(2,0,1))
     image = self.image_transforms(image)
+
+    if self.data_type == "float":
+      image = image / 255.0
 
     if self.split == "train":
       mask = torch.zeros([1, image.shape[-2], image.shape[-1]])
@@ -151,6 +149,11 @@ def nf_fast_flow(input_chw, conv3x3_only, hidden_ratio, flow_steps, clamp=2.0):
         )
     return nodes
 
+# Preprocess fast flow images with this; assume input is [0,1]
+fastflow_preprocess_transforms = transforms.Compose([
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
+
 class FastFlow(nn.Module):
     def __init__(
         self,
@@ -159,7 +162,6 @@ class FastFlow(nn.Module):
         input_size = 256,
         conv3x3_only = False,
         hidden_ratio = 1.0,
-        preprocess_input = True,
     ):
         super(FastFlow, self).__init__()
         self.backbone_name = backbone_name
@@ -207,16 +209,9 @@ class FastFlow(nn.Module):
             )
         self.input_size = input_size
 
-        self.preprocess_input = preprocess_input
-        self.preprocess_transforms = mvtec_preprocess_transforms
-
-
-    def forward(self, x, preprocess_input=None):
-        preprocess_input = self.preprocess_input if preprocess_input is None else preprocess_input
-
-        if preprocess_input:
-            x = self.preprocess_transforms(x.float())
-
+    # Assume that x is already normalized by fastflow_preprocess_transforms
+    def forward(self, x):
+        bsz, nC, nH, nW = x.shape
         self.feature_extractor.eval()
         if isinstance(
             self.feature_extractor, timm.models.vision_transformer.VisionTransformer
@@ -275,13 +270,18 @@ class FastFlow(nn.Module):
 
         heatmap = torch.mean(torch.stack(log_prob_maps, dim=-1), dim=-1)
         residual = torch.mean(torch.stack(log_jac_dets, dim=-1), dim=-1)
-        reward = heatmap.sum(dim=(1,2,3)) + residual
+
+        # Repeat the number of channels
+        heatmap = heatmap.repeat(1,nC,1,1)          # (N,C,H,W)
+        residual = residual.view(-1,1).repeat(1,nC) # (N,C)
+
+        reward = heatmap.sum(dim=(1,2,3)) + residual.sum(dim=1)
         loss = -reward
 
         ret = {
             "loss" : loss,
-            "heatmap" : heatmap, #(N,1,256,256)
-            "residual" : residual # (N,)
+            "heatmap" : heatmap, #(N,nC,256,256)
+            "residual" : residual # (N,nC)
         }
 
         return ret
