@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
-import cv2
+from PIL import Image
 import glob
 
 # The kinds of splits we can do
@@ -79,11 +79,13 @@ class AbdomenOrgans(Dataset):
     # The preprocessing pipeline is different based on the split form
     if "train" in split:
       self._image_transforms = transforms.Compose([
+        transforms.ToTensor(),
         transforms.Resize((image_height, image_width), antialias=False),
         transforms.RandomRotation(60), 
       ])
 
       self._label_transforms = transforms.Compose([
+        transforms.ToTensor(),
         transforms.Resize((image_height, image_width), antialias=False),
         transforms.RandomRotation(60), 
       ])
@@ -96,10 +98,16 @@ class AbdomenOrgans(Dataset):
 
     elif "test" in split:
       self.image_transforms = image_transforms if image_transforms is not None else \
-          transforms.Resize((image_height, image_width))
+          transforms.Compose([
+              transforms.ToTensor(),
+              transforms.Resize((image_height, image_width))
+          ])
 
       self.label_transforms = label_transforms if label_transforms is not None else \
-          transforms.Resize((image_height, image_width))
+          transforms.Compose([
+              transforms.ToTensor(),
+              transforms.Resize((image_height, image_width))
+          ])
 
   def __len__(self):
     return len(self.image_filenames)
@@ -110,13 +118,9 @@ class AbdomenOrgans(Dataset):
     gonogo_label_file = os.path.join(self.gonogo_labels_dir, self.image_filenames[idx])
 
     # Read image and label
-    image_np = cv2.imread(image_file)
-    organ_label_np = cv2.imread(organ_label_file, cv2.IMREAD_GRAYSCALE)
-    gonogo_label_np = cv2.imread(gonogo_label_file, cv2.IMREAD_GRAYSCALE)
-
-    image = torch.tensor(image_np.transpose(2,0,1))                       # (3, H, C)
-    organ_label = torch.tensor(organ_label_np).unsqueeze(dim=0).byte()    # (1, H, C)
-    gonogo_label = torch.tensor(gonogo_label_np).unsqueeze(dim=0).byte()  # (1, H, C)
+    image = Image.open(image_file).convert("RGB")
+    organ_label = Image.open(organ_label_file).convert("L") # L is grayscale
+    gonogo_label = Image.open(gonogo_label_file).convert("L")
 
     if self.split == "train":
       seed = torch.seed()
@@ -128,6 +132,8 @@ class AbdomenOrgans(Dataset):
       organ_label = self.label_transforms(organ_label)
       gonogo_label = self.label_transforms(gonogo_label)
 
+    organ_label = (organ_label * 255).round().long()
+    gonogo_label = (gonogo_label * 255).round().long()
     return image, organ_label, gonogo_label
 
 
