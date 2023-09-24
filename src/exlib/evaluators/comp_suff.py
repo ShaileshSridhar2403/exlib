@@ -12,7 +12,8 @@ class CompSuff(Evaluator):
     def __init__(self, model, 
                  mode: str, 
                  k_fraction: float, 
-                 postprocess=None):
+                 postprocess=None,
+                 task_type='cls'):
         """Create deletion/insertion metric instance.
         Args:
             model (nn.Module): Black-box model being explained.
@@ -23,10 +24,12 @@ class CompSuff(Evaluator):
         super(CompSuff, self).__init__(model, postprocess)
         
         assert mode in ['comp', 'suff']
+        assert task_type in ['cls', 'reg']
         self.mode = mode
+        self.task_type = task_type
         self.k_fraction = k_fraction
 
-    def forward(self, X, Z, verbose=0, save_to=None):
+    def forward(self, X, Z, kwargs=None, verbose=0, save_to=None):
         """Run metric on one image-saliency pair.
             Args:
                 X = img_tensor (Tensor): normalized image tensor. (bsz, n_channel, img_dim1, img_dim2)
@@ -39,17 +42,27 @@ class CompSuff(Evaluator):
             Return:
                 scores (Tensor): Array containing scores at every step.
         """
+        self.model.eval()
         img_tensor = X
         explanation = Z
-        bsz, n_channel, img_dim1, img_dim2 = X.shape
-        HW = img_dim1 * img_dim2
-        pred = self.model(img_tensor)
-        if self.postprocess is not None:
-            pred = self.postprocess(pred)
+        if len(X.shape) == 4: # image
+            bsz, n_channel, img_dim1, img_dim2 = X.shape
+            HW = img_dim1 * img_dim2
+            model_type = 'image'
+        else: # text
+            bsz, seq_len = X.shape
+            HW = seq_len
+            n_channel = 1
+            model_type = 'text'
+        with torch.no_grad():
+            if kwargs:
+                pred = self.model(img_tensor, **kwargs)
+            else:
+                pred = self.model(img_tensor)
+            if self.postprocess is not None:
+                pred = self.postprocess(pred)
         pred = torch.softmax(pred, dim=-1)
         top, c = torch.max(pred, 1)
-        # c = c.cpu().numpy()[0]
-        # n_steps = (HW + self.step - 1) // self.step
         step = int(self.k_fraction * HW)
 
         if self.mode == 'comp':
@@ -64,7 +77,6 @@ class CompSuff(Evaluator):
         finish[finish < 0] = 0.0
         finish[finish > 1] = 1.0
 
-        # scores = torch.empty(bsz, n_steps + 1).cuda()
         # Coordinates of pixels in order of decreasing saliency
         t_r = explanation.reshape(bsz, -1, HW)
         salient_order = torch.argsort(t_r, dim=-1)
@@ -83,10 +95,13 @@ class CompSuff(Evaluator):
                                           coords] = finish.reshape(bsz, n_channel, HW)[batch_indices,
                                                                                        channel_indices, 
                                                                                        coords]
-        
-        pred_mod = self.model(start)
-        if self.postprocess is not None:
-            pred_mod = self.postprocess(pred_mod)
+        with torch.no_grad():
+            if kwargs:
+                pred_mod = self.model(start, **kwargs)
+            else:
+                pred_mod = self.model(start)
+            if self.postprocess is not None:
+                pred_mod = self.postprocess(pred_mod)
         pred_mod = torch.softmax(pred_mod, dim=-1)
         scores = pred[range(bsz), c] - pred_mod[range(bsz), c]
 
@@ -105,9 +120,9 @@ class CompSuffSem(CompSuff):
             k_fraction (float): number of pixels modified per one iteration.
             substrate_fn (func): a mapping from old pixels to new pixels.
         """
-        super().__init__(model, k_fraction, postprocess)
+        super().__init__(model, mode, k_fraction, postprocess)
 
-    def forward(self, X, Z, sem_part):
+    def forward(self, X, Z, sem_part, kwargs=None):
         """Run metric on one image-saliency pair.
             Args:
                 X = img_tensor (Tensor): normalized image tensor. (bsz, n_channel, img_dim1, img_dim2)
@@ -122,6 +137,7 @@ class CompSuffSem(CompSuff):
             Return:
                 scores (Tensor): Array containing scores at every step.
         """
+        self.model.eval()
         scores_all = []
         for b_i in range(X.size(0)):
             sem_part_bool = convert_idx_masks_to_bool(sem_part[b_i:b_i+1])
@@ -129,13 +145,27 @@ class CompSuffSem(CompSuff):
 
             img_tensor = X[b_i:b_i+1]
             explanation = Z[b_i:b_i+1].to(img_tensor.device)
-            bsz, n_channel, img_dim1, img_dim2 = X.shape
-            HW = img_dim1 * img_dim2
-            pred = self.model(img_tensor)
-            if self.postprocess is not None:
-                pred = self.postprocess(pred)
+            if len(X.shape) == 4:
+                bsz, n_channel, img_dim1, img_dim2 = img_tensor.shape
+                HW = img_dim1 * img_dim2
+                model_type = 'image'
+            else:
+                bsz, seq_len = img_tensor.shape
+                HW = seq_len
+                n_channel = 1
+                model_type = 'text'
+            with torch.no_grad():
+                if kwargs:
+                    pred = self.model(img_tensor, **kwargs)
+                else:
+                    pred = self.model(img_tensor)
+                if self.postprocess is not None:
+                    pred = self.postprocess(pred)
             pred = torch.softmax(pred, dim=-1)
-            top, c = torch.max(pred, 1)
+            if self.task_type == 'cls':
+                top, c = torch.max(pred, 1)
+            else:
+                c = torch.arange(pred.shape[-1])
 
             if self.mode == 'comp':
                 start = img_tensor.clone()
@@ -154,13 +184,25 @@ class CompSuffSem(CompSuff):
             salient_order_masks = torch.argsort(t_r_masks, dim=-1).flip(-1)
             mask_sem_best = sem_part_bool[salient_order_masks[0]]
 
-            start[0,:,mask_sem_best] = finish[0,:,mask_sem_best]
+            if model_type == 'image':
+                start[0,:,mask_sem_best] = finish[0,:,mask_sem_best]
+            else:
+                start[0,mask_sem_best] = finish[0,mask_sem_best]
 
-            pred_mod = self.model(start)
-            if self.postprocess is not None:
-                pred_mod = self.postprocess(pred_mod)
-            pred_mod = torch.softmax(pred_mod, dim=-1)
-            scores = pred[range(bsz), c] - pred_mod[range(bsz), c]
+            with torch.no_grad():
+                if kwargs:
+                    pred_mod = self.model(start, **kwargs)
+                else:
+                    pred_mod = self.model(start)
+                if self.postprocess is not None:
+                    pred_mod = self.postprocess(pred_mod)
+            if self.task_type == 'cls':
+                pred_mod = torch.softmax(pred_mod, dim=-1)
+                scores = pred[range(bsz), c] - pred_mod[range(bsz), c]
+            else:
+                criterion = nn.MSELoss(reduction='none')
+                mod_loss = criterion(pred_mod, pred)
+                scores = mod_loss
             scores_all.append(scores)
 
         scores_all = torch.cat(scores_all, dim=0)

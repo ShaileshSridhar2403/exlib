@@ -1,3 +1,5 @@
+# TODO: optimize
+
 from __future__ import division
 import math
 import torch
@@ -26,13 +28,16 @@ AttributionOutputSOP = namedtuple("AttributionOutputSOP",
                                    "mask_weights",
                                    "attributions", 
                                    "attributions_max",
+                                   "attributions_all",
                                    "flat_masks"])
 
 
-def compress_masks(masks, masks_weights, min_size=0):
-
-    def compress_single_masks(masks, masks_weights, min_size):
-        num_masks, img_dim_1, img_dim_2 = masks.shape
+def compress_masks(masks, masks_weights, min_size=0, model_type='image'):
+    def compress_single_masks(masks, masks_weights, min_size, model_type):
+        if model_type == 'image':
+            num_masks, img_dim_1, img_dim_2 = masks.shape
+        else:
+            num_masks, seq_len = masks.shape
         masks_bool = (masks > 0).int()
 
         # data_count = masks_bool.sum(dim=-1).sum(dim=-1)
@@ -42,8 +47,11 @@ def compress_masks(masks, masks_weights, min_size=0):
 
         masks_bool = masks_bool[sorted_indices]  # sorted masks
 
-        masks = torch.zeros(masks_bool.shape[-2], 
-                            masks_bool.shape[-1]).to(masks.device)
+        if model_type == 'image':
+            masks = torch.zeros(masks_bool.shape[-2], 
+                                masks_bool.shape[-1]).to(masks.device)
+        else:
+            masks = torch.zeros(masks_bool.shape[-1]).to(masks.device)
 
         count = 1
         for mask in masks_bool:
@@ -58,16 +66,28 @@ def compress_masks(masks, masks_weights, min_size=0):
 
         return masks
 
-    if len(masks.shape) == 4:
-        bsz, num_masks, img_dim_1, img_dim_2 = masks.shape
-        new_masks = []
-        for i in range(len(masks)):
-            compressed_mask = compress_single_masks(masks[i], masks_weights[i], 
-                                                    min_size)
-            new_masks.append(compressed_mask)
-        return torch.stack(new_masks)
-    else:  # 3
-        return compress_single_masks(masks, masks_weights, min_size)
+    if model_type == 'image':
+        if len(masks.shape) == 4:
+            bsz, num_masks, img_dim_1, img_dim_2 = masks.shape
+            new_masks = []
+            for i in range(len(masks)):
+                compressed_mask = compress_single_masks(masks[i], masks_weights[i], 
+                                                        min_size, model_type)
+                new_masks.append(compressed_mask)
+            return torch.stack(new_masks)
+        else:  # 3
+            return compress_single_masks(masks, masks_weights, min_size, model_type)
+    else:
+        if len(masks.shape) == 3:
+            bsz, num_masks, seq_len = masks.shape
+            new_masks = []
+            for i in range(len(masks)):
+                compressed_mask = compress_single_masks(masks[i], masks_weights[i], 
+                                                        min_size, model_type)
+                new_masks.append(compressed_mask)
+            return torch.stack(new_masks)
+        else:  # 2
+            return compress_single_masks(masks, masks_weights, min_size, model_type)
 
 
 def _get_inverse_sqrt_with_separate_heads_schedule_with_warmup_lr_lambda(
@@ -439,22 +459,27 @@ class SOP(PreTrainedModel):
         # Initialize the weights of the model
         self.init_weights()
         self.blackbox_model = blackbox_model
-        if self.finetune_layers_idxs is None:
-            self.class_weights = copy.deepcopy(getattr(self.blackbox_model, self.finetune_layers[0]).weight)
-            # Freeze the frozen module
+        if len(self.finetune_layers) > 0:
+            if self.finetune_layers_idxs is None:
+                self.class_weights = copy.deepcopy(getattr(self.blackbox_model, self.finetune_layers[0]).weight)
+                # Freeze the frozen module
+                for name, param in self.blackbox_model.named_parameters():
+                    if sum([ft_layer in name for ft_layer in self.finetune_layers]) == 0: # the name doesn't match any finetune layers
+                        param.requires_grad = False
+                    else:
+                        param.requires_grad = True
+            else:
+                self.class_weights = copy.deepcopy(getattr(self.blackbox_model, self.finetune_layers[0])[self.finetune_layers_idxs[0]].weight)
+                # Freeze the frozen module
+                for name, param in self.blackbox_model.named_parameters():
+                    if sum([f'{self.finetune_layers[i]}.{self.finetune_layers_idxs[i]}' in name for i in range(len(self.finetune_layers))]) == 0: # the name doesn't match any finetune layers
+                        param.requires_grad = False
+                    else:
+                        param.requires_grad = True
+        else:  # clip. todo: need to make this general in the future
+            self.class_weights = self.blackbox_model.class_weights.clone()
             for name, param in self.blackbox_model.named_parameters():
-                if sum([ft_layer in name for ft_layer in self.finetune_layers]) == 0: # the name doesn't match any finetune layers
-                    param.requires_grad = False
-                else:
-                    param.requires_grad = True
-        else:
-            self.class_weights = copy.deepcopy(getattr(self.blackbox_model, self.finetune_layers[0])[self.finetune_layers_idxs[0]].weight)
-            # Freeze the frozen module
-            for name, param in self.blackbox_model.named_parameters():
-                if sum([f'{self.finetune_layers[i]}.{self.finetune_layers_idxs[i]}' in name for i in range(len(self.finetune_layers))]) == 0: # the name doesn't match any finetune layers
-                    param.requires_grad = False
-                else:
-                    param.requires_grad = True
+                param.requires_grad = False
 
     def forward(self, 
                 inputs, 
@@ -462,7 +487,8 @@ class SOP(PreTrainedModel):
                 attention_mask=None, 
                 masks=None, 
                 epoch=-1, 
-                mask_batch_size=16):
+                mask_batch_size=16,
+                label=None):
         # print('inputs', inputs.shape)
         if epoch == -1:
             epoch = self.num_heads
@@ -659,9 +685,12 @@ class SOP(PreTrainedModel):
                 .expand(selected_input_mask_weights.shape).reshape(-1, 
                                                                 seq_len)  # (bsz, n_masks, seq_len)
             
-            selected_token_type_ids = token_type_ids.unsqueeze(1) \
-                .expand(selected_input_mask_weights.shape).reshape(-1, 
-                                                                seq_len)
+            if token_type_ids is not None:
+                selected_token_type_ids = token_type_ids.unsqueeze(1) \
+                    .expand(selected_input_mask_weights.shape).reshape(-1, 
+                                                                    seq_len)
+            else:
+                selected_token_type_ids = None
             # selected_attention_mask = attention_mask.unsqueeze(1) * selected_input_mask_weights
             selected_attention_mask = attention_mask.unsqueeze(1) \
                 .expand(selected_input_mask_weights.shape)
@@ -685,9 +714,15 @@ class SOP(PreTrainedModel):
         
         for i in range(0, selected_masked_inputs.shape[0], mask_batch_size):
             if self.pooler:
-                output_i = self.blackbox_model(
-                    selected_masked_inputs[i:i+mask_batch_size]
-                )
+                if self.model_type == 'image':
+                    output_i = self.blackbox_model(
+                        selected_masked_inputs[i:i+mask_batch_size]
+                    )
+                else:
+                    output_i = self.blackbox_model(
+                        attention_mask=selected_attention_mask[i:i+mask_batch_size],
+                        inputs_embeds=inputs_embeds[i:i+mask_batch_size]
+                    )
                 pooler_i = output_i.pooler_output
             else:
                 if self.model_type == 'image':
@@ -696,13 +731,22 @@ class SOP(PreTrainedModel):
                         output_hidden_states=True
                     )
                 else:
-                    output_i = self.blackbox_model(
-                        # selected_masked_inputs[i:i+mask_batch_size],
-                        token_type_ids=selected_token_type_ids[i:i+mask_batch_size],
-                        attention_mask=selected_attention_mask[i:i+mask_batch_size],
-                        inputs_embeds=inputs_embeds[i:i+mask_batch_size],
-                        output_hidden_states=True
-                    )
+                    if selected_token_type_ids is not None:
+                        output_i = self.blackbox_model(
+                            # selected_masked_inputs[i:i+mask_batch_size],
+                            token_type_ids=selected_token_type_ids[i:i+mask_batch_size],
+                            attention_mask=selected_attention_mask[i:i+mask_batch_size],
+                            inputs_embeds=inputs_embeds[i:i+mask_batch_size],
+                            output_hidden_states=True
+                        )
+                    else:
+                        output_i = self.blackbox_model(
+                            # selected_masked_inputs[i:i+mask_batch_size],
+                            # token_type_ids=selected_token_type_ids[i:i+mask_batch_size],
+                            attention_mask=selected_attention_mask[i:i+mask_batch_size],
+                            inputs_embeds=inputs_embeds[i:i+mask_batch_size],
+                            output_hidden_states=True
+                        )
                 pooler_i = output_i.hidden_states[-1][:,0]
             # import pdb
             # pdb.set_trace()
@@ -748,19 +792,45 @@ class SOP(PreTrainedModel):
         
         if self.return_tuple:
             # todo: debug for segmentation
-            if not self.training and self.pred_type == 'sequence' and self.model_type == 'image':
-                _, predicted = torch.max(weighted_output.data, -1)
+            masks_aggr = None
+            masks_aggr_pred_cls = None
+            masks_max_pred_cls = None
+            flat_masks = None
+
+            if not self.training and self.pred_type == 'sequence':
+                if label is not None:
+                    predicted = label
+                else:
+                    _, predicted = torch.max(weighted_output.data, -1)
+                if self.model_type == 'image':
+                    masks_mult = input_mask_weights.unsqueeze(2) * \
+                    output_mask_weights.unsqueeze(-1).unsqueeze(-1) # bsz, n_masks, n_cls, img_dim, img_dim
+                else:  # text
+                    masks_mult = input_mask_weights.unsqueeze(2) * \
+                    output_mask_weights.unsqueeze(-1) # bsz, n_masks, n_cls, seq_len
+                masks_aggr = masks_mult.sum(1) # bsz, n_cls, img_dim, img_dim OR bsz, n_cls, seq_len
+                masks_aggr_pred_cls = masks_aggr[range(bsz), predicted].unsqueeze(1)
+                max_mask_indices = output_mask_weights.max(2).values.max(1).indices
+                masks_max_pred_cls = masks_mult[range(bsz),max_mask_indices,predicted].unsqueeze(1)
+                flat_masks = compress_masks(input_mask_weights, output_mask_weights,
+                                            model_type=self.model_type)
+            elif not self.training and self.pred_type == 'token':
+                # import pdb
+                # pdb.set_trace()
+                # _, predicted = torch.max(weighted_output.data, -1)
                 masks_mult = input_mask_weights.unsqueeze(2) * \
                 output_mask_weights.unsqueeze(-1).unsqueeze(-1) # bsz, n_masks, n_cls, img_dim, img_dim
-                masks_aggr = masks_mult.sum(1) # bsz, n_masks, img_dim, img_dim
-                masks_aggr_pred_cls = masks_aggr[range(bsz), predicted].unsqueeze(1)
-                max_mask_indices = output_mask_weights.max(2).indices.max(1).indices
-                masks_max_pred_cls = masks_mult[range(bsz),max_mask_indices,predicted].unsqueeze(1)
-                flat_masks = compress_masks(input_mask_weights, output_mask_weights)
-            else:
-                masks_aggr_pred_cls = None
-                masks_max_pred_cls = None
-                flat_masks = None
+                masks_aggr = masks_mult.sum(1) # bsz, n_cls, img_dim, img_dim OR bsz, n_cls, seq_len
+                masks_aggr_pred_cls = masks_aggr
+                # masks_aggr_pred_cls = masks_aggr[range(bsz), predicted].unsqueeze(1)
+                max_mask_indices = output_mask_weights.max(1).indices
+                # masks_max_pred_cls = masks_mult[max_mask_indices[:,0]]
+                masks_max_pred_cls = max_mask_indices
+                # TODO: this has some problems ^
+                import pdb
+                pdb.set_trace()
+                flat_masks = compress_masks(input_mask_weights, output_mask_weights,
+                                            model_type=self.model_type)
 
             return AttributionOutputSOP(weighted_output,
                                         outputs,
@@ -769,6 +839,7 @@ class SOP(PreTrainedModel):
                                         output_mask_weights,
                                         masks_aggr_pred_cls,
                                         masks_max_pred_cls,
+                                        masks_aggr,
                                         flat_masks)
         else:
             return weighted_output

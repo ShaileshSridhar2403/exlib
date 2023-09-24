@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 from .common import Evaluator
-from .ins_del import InsDel
-from .comp_suff import CompSuff
+from .ins_del import InsDel, InsDelSem
+from .comp_suff import CompSuff, CompSuffSem
 
 class NNZ(Evaluator): 
 	def __init__(self): 

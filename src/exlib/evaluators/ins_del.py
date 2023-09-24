@@ -35,7 +35,7 @@ class InsDel(Evaluator):
         else:
             return (arr.sum(-2) - arr[:, 0] / 2 - arr[:, -2] / 2) / (arr.shape[1] - 1)
 
-    def forward(self, X, Z, verbose=0, save_to=None, return_dict=False):
+    def forward(self, X, Z, kwargs=None, return_dict=False):
         """Run metric on one image-saliency pair.
             Args:
                 X = img_tensor (Tensor): normalized image tensor. (bsz, n_channel, img_dim1, img_dim2)
@@ -53,11 +53,22 @@ class InsDel(Evaluator):
         # pdb.set_trace()
         img_tensor = X
         explanation = Z
-        bsz, n_channel, img_dim1, img_dim2 = X.shape
-        HW = img_dim1 * img_dim2
-        pred = self.model(img_tensor)
-        if self.postprocess is not None:
-            pred = self.postprocess(pred)
+        if len(X.shape) == 4: # image
+            bsz, n_channel, img_dim1, img_dim2 = X.shape
+            HW = img_dim1 * img_dim2
+            model_type = 'image'
+        else: # text
+            bsz, seq_len = X.shape
+            HW = seq_len
+            n_channel = 1
+            model_type = 'text'
+        with torch.no_grad():
+            if kwargs:
+                pred = self.model(img_tensor, **kwargs)
+            else:
+                pred = self.model(img_tensor)
+            if self.postprocess is not None:
+                pred = self.postprocess(pred)
         if self.task_type == 'cls':
             top, c = torch.max(pred, 1)
         else:
@@ -68,13 +79,9 @@ class InsDel(Evaluator):
         n_steps = (HW + self.step - 1) // self.step
 
         if self.mode == 'del':
-            title = 'Deletion game'
-            ylabel = 'Pixels deleted'
             start = img_tensor.clone()
             finish = self.substrate_fn(img_tensor)
         elif self.mode == 'ins':
-            title = 'Insertion game'
-            ylabel = 'Pixels inserted'
             start = self.substrate_fn(img_tensor)
             finish = img_tensor.clone()
         # import pdb
@@ -86,21 +93,23 @@ class InsDel(Evaluator):
         finish[finish > 1] = 1.0
 
         if self.task_type == 'cls':
-            scores = torch.empty(bsz, n_steps + 1).cuda()
+            scores = torch.zeros(bsz, n_steps + 1).cuda()
         else:
-            scores = torch.empty(bsz, n_steps + 1, len(c)).cuda()
-        # import pdb
-        # pdb.set_trace()
+            scores = torch.zeros(bsz, n_steps + 1, len(c)).cuda()
+        
         # Coordinates of pixels in order of decreasing saliency
         t_r = explanation.reshape(bsz, -1, HW)
         salient_order = torch.argsort(t_r, dim=-1)
         salient_order = torch.flip(salient_order, [1, 2])
-        # import pdb
-        # pdb.set_trace()
+
         for i in range(n_steps+1):
-            pred_mod = self.model(start)
-            if self.postprocess is not None:
-                pred_mod = self.postprocess(pred_mod)
+            with torch.no_grad():
+                if kwargs:
+                    pred_mod = self.model(start, **kwargs)
+                else:
+                    pred_mod = self.model(start)
+                if self.postprocess is not None:
+                    pred_mod = self.postprocess(pred_mod)
             if self.task_type == 'cls':
                 pred_mod = torch.softmax(pred_mod, dim=-1)
                 # import pdb
@@ -108,31 +117,29 @@ class InsDel(Evaluator):
                 scores[:,i] = pred_mod[range(bsz), c]
             else:
                 criterion = nn.MSELoss(reduction='none')
-                # print('pred_mod', pred_mod.shape)
-                # print('pred', pred.shape)
-                # import pdb
-                # pdb.set_trace()
                 mod_loss = criterion(pred_mod, pred)
-                # import pdb
-                # pdb.set_trace()
                 scores[:,i] = mod_loss
             # Render image if verbose, if it's the last step or if save is required.
             
             if i < n_steps:
                 coords = salient_order[:, :, self.step * i:self.step * (i + 1)]
                 batch_indices = torch.arange(bsz).view(-1, 1, 1).to(coords.device)
-                channel_indices = torch.arange(n_channel).view(1, -1, 1).to(coords.device)
 
+                if model_type == 'image':
+                    channel_indices = torch.arange(n_channel).view(1, -1, 1).to(coords.device)
+                else:  # text
+                    channel_indices = 0
                 start.reshape(bsz, n_channel, HW)[batch_indices, 
                                                   channel_indices, 
                                                   coords] = finish.reshape(bsz, n_channel, HW)[batch_indices, 
                                                                                                channel_indices, 
                                                                                                coords]
-        # import pdb
-        # pdb.set_trace()
+            if (start == finish).all():
+                for j in range(i+1, n_steps+1):
+                    scores[:, j] = scores[:, j - 1]
+                break
+            
         auc_score = self.auc(scores)
-        # import pdb
-        # pdb.set_trace()
         if return_dict:
             return {
                 'auc_score': auc_score,
@@ -207,11 +214,12 @@ class InsDelSem(InsDel):
         super(InsDelSem, self).__init__(model, mode, step, substrate_fn, postprocess, 
                                         task_type)
 
-    def forward(self, X, Z, sem_part, return_dict=False):
+    def forward(self, X, Z, sem_part, kwargs=None, return_dict=False):
         """Run metric on one image-saliency pair.
             Args:
                 X = img_tensor (Tensor): normalized image tensor. (bsz, n_channel, img_dim1, img_dim2)
                 Z = explanation (Tensor): saliency map. (bsz, 1, img_dim1, img_dim2)
+                sem_part: (bsz, 1, img_dim1, img_dim2)
                 verbose (int): in [0, 1, 2].
                     0 - return list of scores.
                     1 - also plot final step.
@@ -220,6 +228,7 @@ class InsDelSem(InsDel):
             Return:
                 scores (Tensor): Array containing scores at every step.
         """
+        self.model.eval()
         auc_score_all = []
         scores_all = []
         starts = []
@@ -230,23 +239,33 @@ class InsDelSem(InsDel):
 
             img_tensor = X[b_i:b_i+1]
             explanation = Z[b_i:b_i+1].to(img_tensor.device)
-            bsz, n_channel, img_dim1, img_dim2 = img_tensor.shape
-            HW = img_dim1 * img_dim2
-            pred = self.model(img_tensor)
-            if self.postprocess is not None:
-                pred = self.postprocess(pred)
-            top, c = torch.max(pred, 1)
-            # c = c.cpu().numpy()[0]
-            # n_steps = (HW + self.step - 1) // self.step
+            if len(X.shape) == 4:
+                bsz, n_channel, img_dim1, img_dim2 = img_tensor.shape
+                HW = img_dim1 * img_dim2
+                model_type = 'image'
+            else:
+                bsz, seq_len = img_tensor.shape
+                HW = seq_len
+                n_channel = 1
+                model_type = 'text'
+            if kwargs:
+                kwargs_i = {k: v[b_i:b_i+1] for k, v in kwargs.items()}
+            with torch.no_grad():
+                if kwargs:
+                    pred = self.model(img_tensor, **kwargs_i)
+                else:
+                    pred = self.model(img_tensor)
+                if self.postprocess is not None:
+                    pred = self.postprocess(pred)
+            if self.task_type == 'cls':
+                top, c = torch.max(pred, 1)
+            else:
+                c = torch.arange(pred.shape[-1])
 
             if self.mode == 'del':
-                title = 'Deletion game'
-                ylabel = 'Pixels deleted'
                 start = img_tensor.clone()
                 finish = self.substrate_fn(img_tensor)
             elif self.mode == 'ins':
-                title = 'Insertion game'
-                ylabel = 'Pixels inserted'
                 start = self.substrate_fn(img_tensor)
                 finish = img_tensor.clone()
 
@@ -264,14 +283,21 @@ class InsDelSem(InsDel):
             scores = torch.empty(bsz, n_steps + 1).cuda()
             # Coordinates of pixels in order of decreasing saliency
             for i in range(n_steps+1):
-                pred = self.model(start)
-                if self.postprocess is not None:
-                    pred = self.postprocess(pred)
+                with torch.no_grad():
+                    if kwargs:
+                        pred = self.model(start, **kwargs_i)
+                    else:
+                        pred = self.model(start)
+                    if self.postprocess is not None:
+                        pred = self.postprocess(pred)
                 pred = torch.softmax(pred, dim=-1)
                 scores[:,i] = pred[range(bsz), c]
                 if i < n_steps:
                     mask_sem_best = sem_part_bool[salient_order_masks[i]]
-                    start[0,:,mask_sem_best] = finish[0,:,mask_sem_best]
+                    if model_type == 'image':
+                        start[0,:,mask_sem_best] = finish[0,:,mask_sem_best]
+                    else:
+                        start[0,mask_sem_best] = finish[0,mask_sem_best]
             
             auc_score = self.auc(scores)
             
