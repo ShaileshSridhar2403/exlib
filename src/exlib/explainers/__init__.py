@@ -1,2 +1,2 @@
-from .torch_explainer import TorchImageLime, TorchImageSHAP
+from .torch_explainer import TorchImageLime, TorchImageSHAP, TorchImageIntGrad, TorchImageSegIntGrad
 from .rise import TorchImageRISE
