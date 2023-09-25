@@ -2,6 +2,7 @@ import os
 import random
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 from PIL import Image
@@ -147,8 +148,40 @@ class AbdomenOrgans(Dataset):
         return image, organ_label, gonogo_label
 
 
+# Basic classification model
+class AbdomenClassificationModel(nn.Module):
+    def __init__(self, num_channels, num_classes):
+        super().__init__()
+        self.num_channels = num_channels
+        self.num_classes = num_classes
 
-class AbodmenModel(nn.Module):
+        self.layers = nn.Sequential(
+            nn.Conv2d(3, 256, kernel_size=3, stride=2, padding=1),   # (N,256,32,32)
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Conv2d(256, 128, kernel_size=3, stride=2, padding=1), # (N,128,16,16)
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.Conv2d(128, 64, kernel_size=3, stride=2, padding=1),  # (N,64,8,8)
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 32, kernel_size=3, stride=2, padding=1),   # (N,32,4,4)
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Flatten(1),
+            nn.Linear(32*4*4, num_classes)
+        )
+
+    def forward(self, x):
+        N, C, H, W = x.shape
+        assert C == 3
+        x = F.interpolate(x, size=[64,64])
+        y = self.layers(x)
+        return y
+
+
+# Basic segmentation model
+class AbodmenSegmentationModel(nn.Module):
     def __init__(self, in_channels, out_channels,
                  encoder_name="resnet50", encoder_weights="imagenet"):
         super().__init__()
