@@ -63,7 +63,10 @@ class CompSuff(Evaluator):
                 pred = self.postprocess(pred)
         pred = torch.softmax(pred, dim=-1)
         top, c = torch.max(pred, 1)
-        step = int(self.k_fraction * HW)
+        if self.k_fraction < 1:
+            step = int(self.k_fraction * HW)
+        else:
+            step = int(self.k_fraction)
 
         if self.mode == 'comp':
             start = img_tensor.clone()

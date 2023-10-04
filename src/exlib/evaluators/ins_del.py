@@ -84,6 +84,7 @@ class InsDel(Evaluator):
         elif self.mode == 'ins':
             start = self.substrate_fn(img_tensor)
             finish = img_tensor.clone()
+        start_clone = start.clone()
         # import pdb
         # pdb.set_trace()
 
@@ -91,6 +92,7 @@ class InsDel(Evaluator):
         start[start > 1] = 1.0
         finish[finish < 0] = 0.0
         finish[finish > 1] = 1.0
+        all_states = []
 
         if self.task_type == 'cls':
             scores = torch.zeros(bsz, n_steps + 1).cuda()
@@ -102,7 +104,7 @@ class InsDel(Evaluator):
         salient_order = torch.argsort(t_r, dim=-1)
         salient_order = torch.flip(salient_order, [1, 2])
 
-        for i in range(n_steps+1):
+        for i in tqdm(range(n_steps+1)):
             with torch.no_grad():
                 if kwargs:
                     pred_mod = self.model(start, **kwargs)
@@ -134,6 +136,7 @@ class InsDel(Evaluator):
                                                   coords] = finish.reshape(bsz, n_channel, HW)[batch_indices, 
                                                                                                channel_indices, 
                                                                                                coords]
+            all_states.append(start.clone())
             if (start == finish).all():
                 for j in range(i+1, n_steps+1):
                     scores[:, j] = scores[:, j - 1]
@@ -144,8 +147,9 @@ class InsDel(Evaluator):
             return {
                 'auc_score': auc_score,
                 'scores': scores,
-                'start': start,
-                'finish': finish
+                'start': start_clone,
+                'finish': finish,
+                'all_states': all_states
             }
         else:
             return auc_score
