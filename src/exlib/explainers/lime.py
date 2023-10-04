@@ -104,8 +104,8 @@ def explain_torch_reg_with_lime(X, model, label, postprocess=None,
                                                     if label is None else label[i].cpu().numpy().item(), 
                                                     **get_image_and_mask_kwargs)
         except:
-            import pdb
-            pdb.set_trace()
+            img,mask = explanation.get_image_and_mask(explanation.top_labels[0] 
+                                                    if label is None else label[i].cpu().numpy().item())
 
         masks.append(mask)
         lime_exps.append(explanation)

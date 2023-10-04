@@ -280,24 +280,37 @@ class InsDelSem(InsDel):
 
             n_steps = len(salient_order_masks)
 
-            scores = torch.empty(bsz, n_steps + 1).cuda()
+            if self.task_type == 'cls':
+                scores = torch.empty(bsz, n_steps + 1).cuda()
+            else:
+                scores = torch.empty(bsz, n_steps + 1, len(c)).cuda()
             # Coordinates of pixels in order of decreasing saliency
             for i in range(n_steps+1):
                 with torch.no_grad():
                     if kwargs:
-                        pred = self.model(start, **kwargs_i)
+                        pred_mod = self.model(start, **kwargs_i)
                     else:
-                        pred = self.model(start)
+                        pred_mod = self.model(start)
                     if self.postprocess is not None:
-                        pred = self.postprocess(pred)
-                pred = torch.softmax(pred, dim=-1)
-                scores[:,i] = pred[range(bsz), c]
+                        pred_mod = self.postprocess(pred_mod)
+                if self.task_type == 'cls':
+                    pred_mod = torch.softmax(pred, dim=-1)
+                    scores[:,i] = pred_mod[range(bsz), c]
+                else:
+                    criterion = nn.MSELoss(reduction='none')
+                    # import pdb
+                    # pdb.set_trace()
+                    mod_loss = criterion(pred_mod, pred)
+                    scores[:,i] = mod_loss
                 if i < n_steps:
                     mask_sem_best = sem_part_bool[salient_order_masks[i]]
                     if model_type == 'image':
                         start[0,:,mask_sem_best] = finish[0,:,mask_sem_best]
                     else:
                         start[0,mask_sem_best] = finish[0,mask_sem_best]
+
+            # import pdb
+            # pdb.set_trace()
             
             auc_score = self.auc(scores)
             
