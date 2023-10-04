@@ -5,14 +5,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-AttributionOutput = namedtuple("AttributionOutput", ["attributions", "explainer_output"])
+FeatureAttrOutput = namedtuple("FeatureAttrOutput", ["attributions", "explainer_output"])
 
 
-class TorchAttribution(nn.Module): 
+class FeatureAttrMethod(nn.Module): 
 	""" Explaination methods that create feature attributions should follow 
 	this signature. """
 	def __init__(self, model, postprocess=None): 
-		super(TorchAttribution, self).__init__() 
+		super(FeatureAttrMethod, self).__init__() 
 		self.model = model
 		self.postprocess = postprocess
 

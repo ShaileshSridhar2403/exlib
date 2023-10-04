@@ -8,11 +8,10 @@ import torch
 import torch.nn as nn
 from skimage.transform import resize
 from tqdm import tqdm
-from .common import TorchAttribution
-from .common import AttributionOutput
+from .common import FeatureAttrMethod, FeatureAttrOutput
 
 
-class TorchImageRISE(TorchAttribution):
+class TorchImageRISE(FeatureAttrMethod):
     def __init__(self, model, input_size, postprocess=None, \
                  gpu_batch=100, N=2000, \
                  s=8, p1=0.5, seed=42):

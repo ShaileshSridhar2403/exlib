@@ -1,6 +1,6 @@
 import torch
 import shap
-from .common import AttributionOutput, torch_img_to_np, np_to_torch_img
+from .common import FeatureAttrOutput, torch_img_to_np, np_to_torch_img
 
 def explain_torch_with_shap(X, model, mask_value, explainer_kwargs, 
                             shap_kwargs, postprocess=None): 

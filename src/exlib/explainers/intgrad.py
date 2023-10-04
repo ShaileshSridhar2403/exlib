@@ -1,15 +1,35 @@
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
-from .common import AttributionOutput
+from .common import FeatureAttrOutput
+
+def intgrad_image_class_loss_fn(y, label):
+    assert y.ndim == 2   # (N, num_classes)
+    assert len(label) == y.size(0)
+    loss = 0.0
+    for i, l in enumerate(label):
+        loss += y[i,l]
+    return loss
 
 
-# Do classiification 
-def explain_torch_with_intgrad(X, model, y_to_loss_func,
-                                X0 = None,
-                                num_steps = 100,
-                                progress_bar = False,
-                                postprocess = None):
+def intgrad_image_seg_loss_fn(y, label):
+    assert y.ndim == 4  # (N, num_segs, H, W)
+    assert len(label) == y.size(0)
+    loss = 0.0
+    for i, l in enumerate(label):
+        inds = y.argmax(dim=1) # Max along the channels
+        H = F.one_hot(inds, num_classes=y.size(1))
+        H = H.unsqueeze(1).transpose(1,-1).view(y.shape)
+        L = (y * H).flatten(1).sum(dim=1)
+        return L
 
+
+# Do classification 
+def explain_image_with_intgrad(X, model, loss_fn,
+                               X0 = None,
+                               num_steps = 32,
+                               progress_bar = False,
+                               postprocess = None):
     """
     Explain a classification model with Integrated Gradients.
     """
@@ -18,7 +38,7 @@ def explain_torch_with_intgrad(X, model, y_to_loss_func,
     if X0 is None:
         X0 = torch.zeros_like(X)
 
-    intgrad = torch.zeros_like(X)
+    acc = torch.zeros_like(X)
 
     pbar = tqdm(range(num_steps)) if progress_bar else range(num_steps)
     for k in pbar:
@@ -29,10 +49,10 @@ def explain_torch_with_intgrad(X, model, y_to_loss_func,
         if postprocess:
             y = postprocess(y)
 
-        loss = y_to_loss_func(y)
+        loss = loss_fn(y)
         loss.sum().backward()
-        intgrad += Xk.grad / num_steps # Recall that step_size = 1 / num_steps
+        acc += Xk.grad / num_steps # Recall that step_size = 1 / num_steps
 
-    return AttributionOutput(intgrad, {})
+    return FeatureAttrOutput(acc, {})
 
 
