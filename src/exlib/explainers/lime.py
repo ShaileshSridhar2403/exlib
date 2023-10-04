@@ -85,7 +85,6 @@ def explain_image_with_lime(X, model, label=None,
 ################################################################################
 ### Old stuff below to be deleted later:
 
-
 def batch_predict_from_torch(model, task, preprocess=None, postprocess=None): 
     """ Batch predict function for a pytorch model """
     def batch_predict(inp):
