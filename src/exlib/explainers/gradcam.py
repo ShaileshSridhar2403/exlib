@@ -18,8 +18,12 @@ class WrappedModel(torch.nn.Module):
     def forward(self, x):
         # return self.model(x)[0]
         # return self.postprocess(self.model(x))
-        outputs = self.model(x, output_hidden_states=True)
-        return outputs.hidden_states[-1]
+        try:
+            outputs = self.model(x, output_hidden_states=True)
+        except:
+            outputs = self.model(x)
+        # return self.postprocess(outputs) #.hidden_states[-1]
+        return outputs.logits
 
 
 class TorchImageGradCAM(TorchAttribution):
@@ -39,7 +43,7 @@ class TorchImageGradCAM(TorchAttribution):
 
     def forward(self, X, label=None):
         with torch.enable_grad():
-            grad_cam_result = self.grad_cam(input_tensor=X, targets=self.target_layers)
+            grad_cam_result = self.grad_cam(input_tensor=X, targets=label)
             grad_cam_result = torch.tensor(grad_cam_result)
 
         return AttributionOutput(grad_cam_result.unsqueeze(1), grad_cam_result)
