@@ -15,8 +15,7 @@ from .intgrad import intgrad_image_class_loss_fn, intgrad_image_seg_loss_fn, exp
 # provide an explanation for the top predicted class.
 # Initialize defaults in the init function.
 
-
-class LimeImageClass(FeatureAttrMethod):
+class LimeImageCls(FeatureAttrMethod):
     def __init__(self, model, postprocess=None, normalize_input=False,
                  LimeImageExplainerKwargs={},
                  explain_instance_kwargs={
@@ -26,7 +25,7 @@ class LimeImageClass(FeatureAttrMethod):
                      "num_samples" : 500,
                  },
                  get_image_and_mask_kwargs={}):
-        super(LimeImageClass, self).__init__(model, postprocess)
+        super(LimeImageCls, self).__init__(model, postprocess)
         self.normalize_input = normalize_input
         self.LimeImageExplainerKwargs = LimeImageExplainerKwargs
         self.explain_instance_kwargs = explain_instance_kwargs
@@ -122,9 +121,9 @@ class TorchImageSHAP(FeatureAttrMethod):
         #max_evals=500, batch_size=50, outputs=shap.Explanation.argsort.flip[:1] if label is None else label)
 
 
-class IntGradImageClass(FeatureAttrMethod):
+class IntGradImageCls(FeatureAttrMethod):
     def __init__(self, model, postprocess=None):
-        super(IntGradImageClass, self).__init__(model, postprocess)
+        super(IntGradImageCls, self).__init__(model, postprocess)
 
     def forward(self, X, label=None, **kwargs):
         if label is None:
@@ -132,8 +131,9 @@ class IntGradImageClass(FeatureAttrMethod):
             if self.postprocess:
                 y = self.postprocess(y)
             label = y.argmax(dim=1)
-            print(f"preparation y is {y}")
-            print(f"preparation label is {label}")
+
+        if not isinstance(label, torch.Tensor):
+            label = torch.tensor(label).to(X.device)
 
         loss_fn = lambda y : intgrad_image_class_loss_fn(y, label)
         return explain_image_with_intgrad(X, self.model, loss_fn,
@@ -146,6 +146,9 @@ class IntGradImageSeg(FeatureAttrMethod):
         super(IntGradImageSeg, self).__init__(model, postprocess)
 
     def forward(self, X, label, **kwargs):
+        if not isinstance(label, torch.Tensor):
+            label = torch.tensor(label).to(X.device)
+
         loss_fn = lambda y : intgrad_image_seg_loss_fn(y, label)
         return explain_image_with_intgrad(X, self.model, loss_fn,
                                           postprocess=self.postprocess,

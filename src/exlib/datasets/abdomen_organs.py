@@ -148,8 +148,9 @@ class AbdomenOrgans(Dataset):
         return image, organ_label, gonogo_label
 
 
+
 # Basic classification model
-class AbdomenClassificationModel(nn.Module):
+class AbdomenClsModel(nn.Module):
     def __init__(self, num_channels, num_classes):
         super().__init__()
         self.num_channels = num_channels
@@ -181,7 +182,7 @@ class AbdomenClassificationModel(nn.Module):
 
 
 # Basic segmentation model
-class AbodmenSegmentationModel(nn.Module):
+class AbodmenSegModel(nn.Module):
     def __init__(self, in_channels, out_channels,
                  encoder_name="resnet50", encoder_weights="imagenet"):
         super().__init__()

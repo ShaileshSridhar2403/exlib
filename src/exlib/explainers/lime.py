@@ -92,9 +92,7 @@ def batch_predict_from_torch(model, task, preprocess=None, postprocess=None):
         if preprocess is not None: 
             inp = preprocess(inp) 
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model.to(device)
-        inp = inp.to(device)
+        inp = inp.to(next(model.parameters()).device)
 
         pred = model(inp)
         if postprocess is not None:
@@ -126,7 +124,7 @@ def explain_torch_reg_with_lime(X, model, label, postprocess=None,
     # get_image_and_mask arguments
     positive_only=True, negative_only=False, hide_rest=False, num_features=5, min_weight=0.0
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = next(model.parameters()).device
     collapse = (X.ndim == 4) and (X.size(1) == 1) # check if single or RGB channel
     X_min, X_max = X.min(), X.max()
     if normalize: 
@@ -158,11 +156,18 @@ def explain_torch_reg_with_lime(X, model, label, postprocess=None,
         # import pdb
         # pdb.set_trace()
         # print('explanation', explanation)
-        img,mask = explanation.get_image_and_mask(explanation.top_labels[0] 
-                                                  if label is None else label[i].cpu().numpy().item(), 
-                                                  **get_image_and_mask_kwargs)
+
+        if label is None:
+            todo_label = explanation.top_labels[0]
+        elif isinstance(label, torch.Tensor):
+            todo_label = label[i].cpu().item()
+        else:
+            todo_label = label[i]
+
+        img,mask = explanation.get_image_and_mask(todo_label, **get_image_and_mask_kwargs)
 
         masks.append(mask)
         lime_exps.append(explanation)
 
     return FeatureAttrOutput(torch.from_numpy(np.stack(masks)), lime_exps)
+
