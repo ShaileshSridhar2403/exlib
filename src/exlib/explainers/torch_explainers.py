@@ -9,7 +9,7 @@ from .common import FeatureAttrMethod
 from .lime import explain_torch_reg_with_lime, explain_image_with_lime
 from .shap import explain_torch_with_shap
 from .rise import TorchImageRISE
-from .intgrad import intgrad_image_seg_loss_fn, intgrad_image_seg_loss_fn, explain_image_with_intgrad
+from .intgrad import intgrad_image_class_loss_fn, intgrad_image_seg_loss_fn, explain_image_with_intgrad
 
 # The default behavior for an attribution method is to
 # provide an explanation for the top predicted class.
@@ -34,6 +34,37 @@ class LimeImageClass(FeatureAttrMethod):
     def forward(self, X, label=None):
         return explain_image_with_lime(X, self.model, label,
             postprocess=self.postprocess,
+            normalize_input=self.normalize_input,
+            LimeImageExplainerKwargs=self.LimeImageExplainerKwargs,
+            explain_instance_kwargs=self.explain_instance_kwargs,
+            get_image_and_mask_kwargs=self.get_image_and_mask_kwargs)
+
+
+# Segmentation model
+class LimeImageSeg(FeatureAttrMethod):
+    def __init__(self, model, postprocess=None, normalize_input=False,
+                 LimeImageExplainerKwargs={},
+                 explain_instance_kwargs={
+                     # Make this however big you need to get every label
+                     # This is because the original LIME API is stupid
+                     "top_labels" : 1000000,
+                 },
+                 get_image_and_mask_kwargs={}):
+        super(LimeImageSeg, self).__init__(model, postprocess)
+        self.normalize_input = normalize_input
+        self.LimeImageExplainerKwargs = LimeImageExplainerKwargs
+        self.explain_instance_kwargs = explain_instance_kwargs
+        self.get_image_and_mask_kwargs = get_image_and_mask_kwargs
+
+    def forward(self, X, label=None):
+
+        # LIME fundamentally works with image classification models,
+        # so we wrap the output of the segmentation model to mimic classification
+        def seg_postprocess(y):
+            N, num_segs, H, W = y.shape
+
+        return explain_image_with_lime(X, self.model, label,
+            postprocess=seg_postprocess,
             normalize_input=self.normalize_input,
             LimeImageExplainerKwargs=self.LimeImageExplainerKwargs,
             explain_instance_kwargs=self.explain_instance_kwargs,
@@ -93,6 +124,8 @@ class IntGradImageClass(FeatureAttrMethod):
             if self.postprocess:
                 y = self.postprocess(y)
             label = y.argmax(dim=1)
+            print(f"preparation y is {y}")
+            print(f"preparation label is {label}")
 
         loss_fn = lambda y : intgrad_image_class_loss_fn(y, label)
         return explain_image_with_intgrad(X, self.model, loss_fn,
