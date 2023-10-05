@@ -151,9 +151,9 @@ class AbdomenOrgans(Dataset):
 
 # Basic classification model
 class AbdomenClsModel(nn.Module):
-    def __init__(self, num_channels, num_classes):
+    def __init__(self, num_classes, in_channels=3):
         super().__init__()
-        self.num_channels = num_channels
+        self.in_channels = in_channels
         self.num_classes = num_classes
 
         self.layers = nn.Sequential(
@@ -182,16 +182,16 @@ class AbdomenClsModel(nn.Module):
 
 
 # Basic segmentation model
-class AbodmenSegModel(nn.Module):
-    def __init__(self, in_channels, out_channels,
+class AbdomenSegModel(nn.Module):
+    def __init__(self, num_segments, in_channels=3,
                  encoder_name="resnet50", encoder_weights="imagenet"):
         super().__init__()
         self.in_channels = in_channels
-        self.out_channels = out_channels
+        self.num_segments = num_segments
         self.unet = smp.Unet(encoder_name=encoder_name,
                              encoder_weights=encoder_weights,
                              in_channels=in_channels,
-                             classes=out_channels)
+                             classes=num_segments)
 
     def forward(self, x):
         N, C, H, W = x.shape

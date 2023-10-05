@@ -9,7 +9,6 @@ from .common import FeatureAttrMethod
 from .lime import explain_torch_reg_with_lime, explain_image_with_lime
 from .shap import explain_torch_with_shap
 from .rise import TorchImageRISE
-from .intgrad import intgrad_image_class_loss_fn, intgrad_image_seg_loss_fn, explain_image_with_intgrad
 
 # The default behavior for an attribution method is to
 # provide an explanation for the top predicted class.
@@ -62,6 +61,7 @@ class LimeImageSeg(FeatureAttrMethod):
         # LIME fundamentally works with image classification models,
         # so we wrap the output of the segmentation model to mimic classification
         def seg_postprocess(y):
+            y = self.postprocess(y)
             N, K, H, W = y.shape
             A = y.argmax(dim=1, keepdim=True)
             M = [A == k for k in range(K)]
@@ -76,6 +76,7 @@ class LimeImageSeg(FeatureAttrMethod):
             get_image_and_mask_kwargs=self.get_image_and_mask_kwargs)
 
 
+# Old implementation of a LIME wrapper
 class TorchImageLime(FeatureAttrMethod):
     def __init__(self, model, postprocess=None,
                    normalize=False,
@@ -97,6 +98,13 @@ class TorchImageLime(FeatureAttrMethod):
             get_image_and_mask_kwargs=self.get_image_and_mask_kwargs)
 
 
+class ShapImageCls(FeatureAttrMethod):
+    def __init__(self, model, postprocess=None,
+                 mask_value=0, explainer_kwargs={}, shap_kwargs={}):
+        super(ShapImageCls, self).__init__(model, postprocess)
+
+
+# Old implementation of a SHAP wrapper
 class TorchImageSHAP(FeatureAttrMethod):
     def __init__(self, model, postprocess=None,
                  mask_value=0, explainer_kwargs={}, shap_kwargs={}):
@@ -121,36 +129,4 @@ class TorchImageSHAP(FeatureAttrMethod):
         #max_evals=500, batch_size=50, outputs=shap.Explanation.argsort.flip[:1] if label is None else label)
 
 
-class IntGradImageCls(FeatureAttrMethod):
-    def __init__(self, model, postprocess=None):
-        super(IntGradImageCls, self).__init__(model, postprocess)
-
-    def forward(self, X, label=None, **kwargs):
-        if label is None:
-            y = self.model(X)
-            if self.postprocess:
-                y = self.postprocess(y)
-            label = y.argmax(dim=1)
-
-        if not isinstance(label, torch.Tensor):
-            label = torch.tensor(label).to(X.device)
-
-        loss_fn = lambda y : intgrad_image_class_loss_fn(y, label)
-        return explain_image_with_intgrad(X, self.model, loss_fn,
-                                          postprocess=self.postprocess,
-                                          **kwargs)
-
-
-class IntGradImageSeg(FeatureAttrMethod):
-    def __init__(self, model, postprocess=None):
-        super(IntGradImageSeg, self).__init__(model, postprocess)
-
-    def forward(self, X, label, **kwargs):
-        if not isinstance(label, torch.Tensor):
-            label = torch.tensor(label).to(X.device)
-
-        loss_fn = lambda y : intgrad_image_seg_loss_fn(y, label)
-        return explain_image_with_intgrad(X, self.model, loss_fn,
-                                          postprocess=self.postprocess,
-                                          **kwargs)
 
