@@ -6,96 +6,12 @@ import copy
 import shap
 
 from .common import FeatureAttrMethod
-from .lime import explain_torch_reg_with_lime, explain_image_with_lime
 from .shap import explain_torch_with_shap
-from .rise import TorchImageRISE
+
 
 # The default behavior for an attribution method is to
 # provide an explanation for the top predicted class.
 # Initialize defaults in the init function.
-
-class LimeImageCls(FeatureAttrMethod):
-    def __init__(self, model, postprocess=None, normalize_input=False,
-                 LimeImageExplainerKwargs={},
-                 explain_instance_kwargs={
-                     # Make this however big you need to get every label
-                     # This is because the original LIME API is stupid
-                     "top_labels" : 1000000,
-                     "num_samples" : 500,
-                 },
-                 get_image_and_mask_kwargs={}):
-        super(LimeImageCls, self).__init__(model, postprocess)
-        self.normalize_input = normalize_input
-        self.LimeImageExplainerKwargs = LimeImageExplainerKwargs
-        self.explain_instance_kwargs = explain_instance_kwargs
-        self.get_image_and_mask_kwargs = get_image_and_mask_kwargs
-
-    def forward(self, X, label=None):
-        return explain_image_with_lime(X, self.model, label,
-            postprocess=self.postprocess,
-            normalize_input=self.normalize_input,
-            LimeImageExplainerKwargs=self.LimeImageExplainerKwargs,
-            explain_instance_kwargs=self.explain_instance_kwargs,
-            get_image_and_mask_kwargs=self.get_image_and_mask_kwargs)
-
-
-# Segmentation model
-class LimeImageSeg(FeatureAttrMethod):
-    def __init__(self, model, postprocess=None, normalize_input=False,
-                 LimeImageExplainerKwargs={},
-                 explain_instance_kwargs={
-                     # Make this however big you need to get every label
-                     # This is because the original LIME API is stupid
-                     "top_labels" : 1000000,
-                     "num_samples" : 500,
-                 },
-                 get_image_and_mask_kwargs={}):
-        super(LimeImageSeg, self).__init__(model, postprocess)
-        self.normalize_input = normalize_input
-        self.LimeImageExplainerKwargs = LimeImageExplainerKwargs
-        self.explain_instance_kwargs = explain_instance_kwargs
-        self.get_image_and_mask_kwargs = get_image_and_mask_kwargs
-
-    def forward(self, X, label=None):
-
-        # LIME fundamentally works with image classification models,
-        # so we wrap the output of the segmentation model to mimic classification
-        def seg_postprocess(y):
-            y = self.postprocess(y)
-            N, K, H, W = y.shape
-            A = y.argmax(dim=1, keepdim=True)
-            M = [A == k for k in range(K)]
-            L = [(y * M[k]).sum(dim=(1,2,3)).view(N,1) for k in range(K)]
-            return torch.cat(L, dim=1)
-
-        return explain_image_with_lime(X, self.model, label,
-            postprocess=seg_postprocess,
-            normalize_input=self.normalize_input,
-            LimeImageExplainerKwargs=self.LimeImageExplainerKwargs,
-            explain_instance_kwargs=self.explain_instance_kwargs,
-            get_image_and_mask_kwargs=self.get_image_and_mask_kwargs)
-
-
-# Old implementation of a LIME wrapper
-class TorchImageLime(FeatureAttrMethod):
-    def __init__(self, model, postprocess=None,
-                   normalize=False,
-                 LimeImageExplainerKwargs={},
-                 explain_instance_kwargs={},
-                 get_image_and_mask_kwargs={}):
-        super(TorchImageLime, self).__init__(model, postprocess)
-        self.normalize = normalize
-        self.LimeImageExplainerKwargs = LimeImageExplainerKwargs
-        self.explain_instance_kwargs = explain_instance_kwargs
-        self.get_image_and_mask_kwargs = get_image_and_mask_kwargs
-
-    def forward(self, X, label=None):
-        return explain_torch_reg_with_lime(X, self.model, label,
-            postprocess=self.postprocess,
-            normalize=self.normalize,
-            LimeImageExplainerKwargs=self.LimeImageExplainerKwargs,
-            explain_instance_kwargs=self.explain_instance_kwargs,
-            get_image_and_mask_kwargs=self.get_image_and_mask_kwargs)
 
 
 class ShapImageCls(FeatureAttrMethod):

@@ -36,27 +36,8 @@ class FeatureAttrMethod(nn.Module):
         super().__init__() 
         self.model = model
 
-    # Attribution function for a single instance of x
-    def attr_one(self, x, t, **kwargs):
-        raise NotImplementedError
-
-    def aggregate(self, attrs): 
-        """ Default implementation is the identity
-        """
-        return attrs
-
-    def forward(self, xs, ts, attr_one_kwargs={}): 
-        """ xs, ts are batched
-        """
-        assert len(X) == len(T)
-        N = len(X)
-        attrs = []
-        for i in range(N):
-            x, t = X[i], T[i]
-            attr = self.attr_one(x, t, **attr_one_kwargs)
-            attrs.append(attr)
-        result = self.aggregate(attrs)
-        return result
+    def forward(self, x, t, **kwargs):
+        raise NotImplementedError()
 
 
 class Seg2ClsWrapper(nn.Module):
@@ -73,8 +54,8 @@ class Seg2ClsWrapper(nn.Module):
         super().__init__()
         self.model = model
 
-    def forward(self, X):
-        y = self.model(X)
+    def forward(self, x):
+        y = self.model(x)
         N, K, H, W = y.shape
         A = y.argmax(dim=1)             # (N,H,W)
         B = F.one_hot(A, num_classes=K) # (N,H,W,K)
@@ -88,26 +69,26 @@ def patch_segmenter(image, sz=(8,8)):
     """ Creates a grid of size sz for rectangular patches. 
     Adheres to the sk-image segmenter signature. """
     shape = image.shape
-    X = torch.from_numpy(image)
+    x = torch.from_numpy(image)
     idx = torch.arange(sz[0]*sz[1]).view(1,1,*sz).float()
-    segments = F.interpolate(idx, size=X.size()[:2], mode='nearest').long()
+    segments = F.interpolate(idx, size=x.size()[:2], mode='nearest').long()
     segments = segments[0,0].numpy()
     return segments
 
-def torch_img_to_np(X): 
-    if X.dim() == 4: 
-        return X.permute(0,2,3,1).numpy()
-    elif X.dim() == 3: 
-        return X.permute(1,2,0).numpy()
+def torch_img_to_np(x): 
+    if x.dim() == 4: 
+        return x.permute(0,2,3,1).numpy()
+    elif x.dim() == 3: 
+        return x.permute(1,2,0).numpy()
     else: 
         raise ValueError("Image tensor doesn't have 3 or 4 dimensions")
 
-def np_to_torch_img(X_np):
-    X = torch.from_numpy(X_np) 
-    if X.dim() == 4: 
-        return X.permute(0,3,1,2)
-    elif X.dim() == 3: 
-        return X.permute(2,0,1)
+def np_to_torch_img(x_np):
+    x = torch.from_numpy(x_np) 
+    if x.dim() == 4: 
+        return x.permute(0,3,1,2)
+    elif x.dim() == 3: 
+        return x.permute(2,0,1)
     else: 
         raise ValueError("Image array doesn't have 3 or 4 dimensions")
 

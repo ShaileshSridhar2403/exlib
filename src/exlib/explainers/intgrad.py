@@ -30,64 +30,63 @@ def intgrad_image_seg_loss_fn(y, label):
 
 
 # Do classification-based thing
-def explain_image_with_intgrad(X, model, loss_fn,
-                               X0 = None,
+def explain_image_with_intgrad(x, model, loss_fn,
+                               x0 = None,
                                num_steps = 32,
                                progress_bar = False):
     """
     Explain a classification model with Integrated Gradients.
     """
     # Default baseline is zeros
-    X0 = torch.zeros_like(X) if X0 is None else X0
+    x0 = torch.zeros_like(x) if x0 is None else x0
 
     step_size = 1 / num_steps
-    intg = torch.zeros_like(X)
+    intg = torch.zeros_like(x)
 
     pbar = tqdm(range(num_steps)) if progress_bar else range(num_steps)
     for k in pbar:
         ak = k * step_size
-        Xk = X0 + ak * (X - X0)
-        Xk.requires_grad_()
-        y = model(Xk)
+        xk = x0 + ak * (x - x0)
+        xk.requires_grad_()
+        y = model(xk)
 
         loss = loss_fn(y)
         loss.sum().backward()
-        intg += Xk.grad * step_size
+        intg += xk.grad * step_size
 
     return FeatureAttrOutput(intg, {})
 
 
-def explain_cls_with_intgrad(model, X, label,
-                             X0 = None,
+def explain_cls_with_intgrad(model, x, label,
+                             x0 = None,
                              num_steps = 32,
                              progress_bar = False):
     """
     Explain a classification model with Integrated Gradients.
     """
-    assert X.size(0) == len(label)
+    assert x.size(0) == len(label)
 
     # Default baseline is zeros
-    X0 = torch.zeros_like(X) if X0 is None else X0
+    x0 = torch.zeros_like(x) if x0 is None else x0
 
     step_size = 1 / num_steps
-    intg = torch.zeros_like(X)
+    intg = torch.zeros_like(x)
 
     pbar = tqdm(range(num_steps)) if progress_bar else range(num_steps)
     for k in pbar:
         ak = k * step_size
-        Xk = X0 + ak * (X - X0)
-        Xk.requires_grad_()
-        y = model(Xk)
+        xk = x0 + ak * (x - x0)
+        xk.requires_grad_()
+        y = model(xk)
 
         loss = 0.0
         for i, l in enumerate(label):
             loss += y[i, l]
 
         loss.backward()
-        intg += Xk.grad * step_size
+        intg += xk.grad * step_size
 
     return FeatureAttrOutput(intg, {})
-
 
 
 class IntGradImageCls(FeatureAttrMethod):
@@ -96,11 +95,11 @@ class IntGradImageCls(FeatureAttrMethod):
     def __init__(self, model):
         super().__init__(model)
 
-    def forward(self, X, T, **kwargs):
-        if not isinstance(T, torch.Tensor):
-            T = torch.tensor(T)
+    def forward(self, x, t, **kwargs):
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor(t)
 
-        return explain_cls_with_intgrad(self.model, X, T, **kwargs)
+        return explain_cls_with_intgrad(self.model, x, t, **kwargs)
 
 
 
@@ -113,11 +112,11 @@ class IntGradImageSeg(FeatureAttrMethod):
 
         self.cls_model = Seg2ClsWrapper(model)
 
-    def forward(self, X, T, **kwargs):
-        if not isinstance(T, torch.Tensor):
-            T = torch.tensor(T)
+    def forward(self, x, t, **kwargs):
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor(t)
 
-        return explain_cls_with_intgrad(self.cls_model, X, T, **kwargs)
+        return explain_cls_with_intgrad(self.cls_model, x, t, **kwargs)
 
 
 

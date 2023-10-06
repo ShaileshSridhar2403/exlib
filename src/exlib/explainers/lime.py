@@ -3,171 +3,144 @@ import torch.nn.functional as F
 import lime
 import numpy as np
 from lime import lime_image
-from .common import FeatureAttrOutput, torch_img_to_np, np_to_torch_img
+from .common import *
 
 
-def lime_image_class_wrapper_fn(model, preprocess=None, postprocess=None):
-    def go(X):
-        model.eval()
-        if preprocess is not None:
-            X = preprocess(X)
-
-        X = X.to(next(model.parameters()).device)
-        y = model(X)
-        if postprocess is not None:
-            y = postprocess(y)
-
+def lime_cls_closure(model, collapse):
+    def go(x_np):
+        x = np_to_torch_img(x_np)
+        x = x.to(next(model.parameters()).device)
+        if collapse:
+            x = x[:,0:1,:,:] # even though lime needs no singleton last dimension in its input,
+            # for an odd reason they put back 3 of them to match RGB format before passing
+            # to batch_predict. So we need to remove the extraneous ones.
+        y = model(x)
         return y.detach().cpu().numpy()
-
     return go
 
 
-def lime_image_preprocess_np_to_pt(X_np, collapse):
-    X = np_to_torch_img(X_np)
-    if collapse:
-        X = X[:,0:1,:,:] # even though lime needs no singleton last dimension in its input,
-        # for an odd reason they put back 3 of them to match RGB format before passing
-        # to batch_predict. So we need to remove the extraneous ones.
-    return X
-
-
-def explain_image_with_lime(X, model, label=None,
-                            normalize_input=False,
-                            postprocess=None,
-                            LimeImageExplainerKwargs={},
-                            # Gets FA for every label if top_labels == None
-                            explain_instance_kwargs={},
-                            get_image_and_mask_kwargs={}):
+def explain_image_cls_with_lime(model, x, ts,
+                                LimeImageExplainerKwargs={},
+                                # Gets FA for every label if top_labels == None
+                                explain_instance_kwargs={},
+                                get_image_and_mask_kwargs={}):
     """
     Explain a pytorch model with LIME.
+    this function is not intended to be called directly.
+    We only explain one image at a time.
 
     # LimeImageExplainer args
     kernel_width=0.25, kernel=None, verbose=False, feature_selection='auto', random_state=None
 
     # explain_instance args
     image, classifier_fn, labels=(1, ), hide_color=None, top_labels=5, num_features=100000, num_samples=1000
-    batch_size=10, segmentation_fn=None, distance_metric='cosine', model_regressor=None, random_seed=None, progress_bar=True
+    batch_size=10, segmentation_fn=None, distance_metric='cosine', model_regressor=None, random_seed=None, progress_bar=true
 
     # get_image_and_mask arguments
-    positive_only=True, negative_only=False, hide_rest=False, num_features=5, min_weight=0.0
+    positive_only=true, negative_only=False, hide_rest=False, num_features=5, min_weight=0.0
     """
-    device = next(model.parameters()).device
 
-    X_min, X_max = X.min(), X.max()
-    if normalize_input:
-        X = (X - X_min)/(X_max-X_min) # shift to 0-1 range
-    X_np = torch_img_to_np(X.cpu()) # rearrange dimensions for numpy
+    ## Images here are not batched
+    C, H, W = x.shape
+    x_np = x.cpu().permute(1,2,0).numpy()
 
-    collapse = (X.ndim == 4) and (X.size(1) == 1) # check if single or RGB channel
+    collapse = x.size(0) == 1
     if collapse:
-        X_np = X_np[:,:,:,0] # lime needs no singleton last dimension
+        x_np = x_np[:,:,0]
 
-    preprocess = lambda X_np : lime_image_preprocess_np_to_pt(X_np, collapse)
+    f = lime_cls_closure(model, collapse)
+    explainer = lime_image.LimeImageExplainer(**LimeImageExplainerKwargs)
 
-    f = lime_image_class_wrapper_fn(model, preprocess=preprocess, postprocess=postprocess)
+    if isinstance(ts, torch.Tensor):
+        todo_labels = ts.numpy()
+    else:
+        todo_labels = ts
 
-    # Uniformly conver the label if appropriate
-    label = label if (label is None or isinstance(label, torch.Tensor)) else torch.tensor(label)
-    masks, lime_exps = [], []
-    for i, Xi_np in enumerate(X_np):
-        explainer = lime_image.LimeImageExplainer(**LimeImageExplainerKwargs)
-        # Need to do some tricks to not have Lime give a key-value error ... yet default is (1,)?
-        todo_label = 1 if label is None else label[i].cpu().item()
-        lime_exp = explainer.explain_instance(Xi_np, f, labels=(todo_label,), **explain_instance_kwargs)
-        todo_label = lime_exp.top_labels[0] if label is None else label[i].cpu().item()
-        img, mask = lime_exp.get_image_and_mask(todo_label, **get_image_and_mask_kwargs)
+    lime_exp = explainer.explain_instance(x_np, f, labels=todo_labels, **explain_instance_kwargs)
+    masks = []
+    for t in todo_labels:
+        img, mask = lime_exp.get_image_and_mask(t, **get_image_and_mask_kwargs)
+        mask = torch.from_numpy(mask).float()
+        if mask.ndim == 2:
+            mask = mask.view(1,H,W).repeat(3,1,1)
         masks.append(mask)
-        lime_exps.append(lime_exp)
 
-    return FeatureAttrOutput(torch.from_numpy(np.stack(masks)), lime_exps)
+    masks = torch.from_numpy(np.stack(masks))
+    return FeatureAttrOutput(masks, lime_exp)
 
 
-################################################################################
-### Old stuff below to be deleted later:
+class LimeImageCls(FeatureAttrMethod):
+    def __init__(self, model,
+                 LimeImageExplainerKwargs={},
+                 explain_instance_kwargs={
+                     # Make this however big you need to get every label
+                     # this is because the original LIME API is stupid
+                     "top_labels" : 1000000,
+                     "num_samples" : 500,
+                 },
+                 get_image_and_mask_kwargs={}):
+        super(LimeImageCls, self).__init__(model)
+        self.LimeImageExplainerKwargs = LimeImageExplainerKwargs
+        self.explain_instance_kwargs = explain_instance_kwargs
+        self.get_image_and_mask_kwargs = get_image_and_mask_kwargs
 
-def batch_predict_from_torch(model, task, preprocess=None, postprocess=None): 
-    """ Batch predict function for a pytorch model """
-    def batch_predict(inp):
-        model.eval()
-        if preprocess is not None: 
-            inp = preprocess(inp) 
+    def forward(self, x, t):
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor(t)
 
-        inp = inp.to(next(model.parameters()).device)
+        N = x.size(0)
+        assert x.ndim == 4 and t.ndim == 1 and len(t) == N
 
-        pred = model(inp)
-        if postprocess is not None:
-            pred = postprocess(pred)
-        if task == 'reg': 
-            output = pred
-        elif task == 'clf': 
-            output = F.softmax(pred, dim=1)
-        else: 
-            raise ValueError(f"Task {task} not implemented")
-        return output.detach().cpu().numpy()
-#         assert False
-    return batch_predict
+        masks, lime_exps = [], []
+        for i in range(N):
+            xi, ti = x[i], t[i].cpu().item()
+            out = explain_image_cls_with_lime(self.model, xi, [ti],
+                    LimeImageExplainerKwargs=self.LimeImageExplainerKwargs,
+                    explain_instance_kwargs=self.explain_instance_kwargs,
+                    get_image_and_mask_kwargs=self.get_image_and_mask_kwargs)
 
-def explain_torch_reg_with_lime(X, model, label, postprocess=None,
-                                normalize=False, LimeImageExplainerKwargs={}, 
-                                explain_instance_kwargs={}, 
-                                get_image_and_mask_kwargs={}): 
-    """
-    Explain a pytorch model with LIME. 
+            masks.append(out.attributions)
+            lime_exps.append(out.explainer_output)
 
-    # LimeImageExplainer args
-    kernel_width=0.25, kernel=None, verbose=False, feature_selection='auto', random_state=None
+        return FeatureAttrOutput(torch.cat(masks, dim=0), lime_exps)
 
-    # explain_instance args
-    image, classifier_fn, labels=(1, ), hide_color=None, top_labels=5, num_features=100000, num_samples=1000 
-    batch_size=10, segmentation_fn=None, distance_metric='cosine', model_regressor=None, random_seed=None, progress_bar=True
 
-    # get_image_and_mask arguments
-    positive_only=True, negative_only=False, hide_rest=False, num_features=5, min_weight=0.0
-    """
-    device = next(model.parameters()).device
-    collapse = (X.ndim == 4) and (X.size(1) == 1) # check if single or RGB channel
-    X_min, X_max = X.min(), X.max()
-    if normalize: 
-        X = (X - X_min)/(X_max-X_min) # shift to 0-1 range
-    X_np = torch_img_to_np(X.cpu()) # rearrange dimensions for numpy
-    if collapse: 
-        X_np = X_np[:,:,:,0] # lime needs no singleton last dimension
-        
-    def p(X): 
-        X = np_to_torch_img(X).to(device)
-        if collapse: 
-            X = X[:,0:1,:,:] # even though lime needs no singleton last dimension in its input, 
-            # for an odd reason they put back 3 of them to match RGB format before passing 
-            # to batch_predict. So we need to remove the extraneous ones. 
+# Segmentation model
+class LimeImageSeg(FeatureAttrMethod):
+    def __init__(self, model,
+                 LimeImageExplainerKwargs={},
+                 explain_instance_kwargs={
+                     # Make this however big you need to get every label
+                     # this is because the original LIME API is stupid
+                     "top_labels" : 1000000,
+                     "num_samples" : 500,
+                 },
+                 get_image_and_mask_kwargs={}):
+        super(LimeImageSeg, self).__init__(model)
+        self.LimeImageExplainerKwargs = LimeImageExplainerKwargs
+        self.explain_instance_kwargs = explain_instance_kwargs
+        self.get_image_and_mask_kwargs = get_image_and_mask_kwargs
 
-        if normalize: 
-            X = X*(X_max - X_min) + X_min # undo shift
-        return X
-        
-    f = batch_predict_from_torch(model, 'reg', preprocess=p, 
-                                 postprocess=postprocess)
-    
-    masks,lime_exps = [],[]
-    for i, X0_np in enumerate(X_np): 
-        explainer = lime_image.LimeImageExplainer(**LimeImageExplainerKwargs)
-        explanation = explainer.explain_instance(X0_np, f, **explain_instance_kwargs)
-        # print('label', label)
-        # print('explanation.top_labels[0]', explanation.top_labels[0])
-        # import pdb
-        # pdb.set_trace()
-        # print('explanation', explanation)
+        self.cls_model = Seg2ClsWrapper(model)
 
-        if label is None:
-            todo_label = explanation.top_labels[0]
-        elif isinstance(label, torch.Tensor):
-            todo_label = label[i].cpu().item()
-        else:
-            todo_label = label[i]
+    def forward(self, x, t):
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor(t)
 
-        img,mask = explanation.get_image_and_mask(todo_label, **get_image_and_mask_kwargs)
+        N = x.size(0)
+        assert x.ndim == 4 and t.ndim == 1 and len(t) == N
 
-        masks.append(mask)
-        lime_exps.append(explanation)
+        masks, lime_exps = [], []
+        for i in range(N):
+            xi, ti = x[i], t[i].cpu().item()
+            out = explain_image_cls_with_lime(self.cls_model, xi, [ti],
+                    LimeImageExplainerKwargs=self.LimeImageExplainerKwargs,
+                    explain_instance_kwargs=self.explain_instance_kwargs,
+                    get_image_and_mask_kwargs=self.get_image_and_mask_kwargs)
 
-    return FeatureAttrOutput(torch.from_numpy(np.stack(masks)), lime_exps)
+            masks.append(out.attributions)
+            lime_exps.append(out.explainer_output)
+
+        return FeatureAttrOutput(torch.cat(masks, dim=0), lime_exps)
+
 
