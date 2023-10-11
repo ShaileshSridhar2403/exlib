@@ -55,14 +55,13 @@ class Seg2ClsWrapper(nn.Module):
         self.model = model
 
     def forward(self, x):
-        y = self.model(x)
+        y = self.model(x)    # (N,K,H,W)
         N, K, H, W = y.shape
         A = y.argmax(dim=1)             # (N,H,W)
-        B = F.one_hot(A, num_classes=K) # (N,H,W,K)
-        C = B.permute(0,3,1,2)          # (N,K,H,W)
-        D = C.view(N,K,1,H,W) * y.view(N,1,K,H,W)
-        L = D.sum(dim=(2,3,4))
-        return L
+        A = F.one_hot(A, num_classes=K) # (N,H,W,K)
+        A = A.permute(0,3,1,2)          # (N,K,H,W)
+        C = (A * y).sum(dim=(2,3))      # (N,K)
+        return C
 
 
 def patch_segmenter(image, sz=(8,8)): 

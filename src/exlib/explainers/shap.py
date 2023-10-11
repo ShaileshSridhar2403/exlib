@@ -1,59 +1,61 @@
+import copy
 import torch
 import shap
-from .common import FeatureAttrOutput, torch_img_to_np, np_to_torch_img
+from .common import *
 
 
-def explain_with_shap(X, model, mask_value, explainer_kwargs, 
-                            shap_kwargs, postprocess=None): 
+def explain_image_cls_with_shap(model, x, t, mask_value, explainer_kwargs, shap_kwargs): 
     device = next(model.parameters()).device
-    X_np = torch_img_to_np(X.cpu())
-    masker = shap.maskers.Image(mask_value, X_np[0].shape)
+    x_np = torch_img_to_np(x.cpu())
+    masker = shap.maskers.Image(mask_value, x_np[0].shape)
 
-    def f(X): 
+    def f(x): 
         with torch.no_grad(): 
-            pred = model(np_to_torch_img(X).to(device))
-            if postprocess:
-                pred = postprocess(pred)
+            pred = model(np_to_torch_img(x).to(device))
             return pred.detach().cpu().numpy()
 
     # By default the Partition explainer is used for all  partition explainer
     explainer = shap.Explainer(f, masker, **explainer_kwargs)
 
     # here we use 500 evaluations of the underlying model to estimate the SHAP values
-    shap_values = explainer(X_np, **shap_kwargs)
+    shap_out = explainer(x_np, **shap_kwargs)
+    shap_values = torch.from_numpy(shap_out.values) # (N,H,W,C,T)
+    shap_values = shap_values.permute(0,4,3,1,2)    # (N,T,C,H,W)
+    svs = []
+    for i in range(x.size(0)):
+        svs.append(shap_values[i,t[i],:,:,:])
+    svs = torch.stack(svs)
+    return FeatureAttrOutput(svs, shap_out)
 
-    if shap_values.values.shape[-1] == 1: 
-        sv = np_to_torch_img(shap_values.values[:,:,:,:,0])
-        return FeatureAttrOutput(sv, shap_values)
-    else: 
-        raise ValueError("Not implemented for explaining more than one output")
+
+class ShapImageCls(FeatureAttrMethod):
+    def __init__(self, model, mask_value=0, explainer_kwargs={}, shap_kwargs={}):
+        super().__init__(model)
+        self.mask_value = mask_value
+        self.explainer_kwargs = explainer_kwargs
+        self.shap_kwargs = shap_kwargs
 
 
+    def forward(self, x, t, **kwargs):
+        sk = copy.deepcopy(self.shap_kwargs)
+        sk["outputs"] = t
+
+        return explain_image_cls_with_shap(self.model, x, t, self.mask_value, self.explainer_kwargs, sk)
 
 
-def explain_torch_with_shap(X, model, mask_value, explainer_kwargs, 
-                            shap_kwargs, postprocess=None): 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    X_np = torch_img_to_np(X.cpu())
-    masker = shap.maskers.Image(mask_value, X_np[0].shape)
+class ShapImageSeg(FeatureAttrMethod):
+    def __init__(self, model, mask_value=0, explainer_kwargs={}, shap_kwargs={}):
+        super().__init__(model)
+        self.mask_value = mask_value
+        self.explainer_kwargs = explainer_kwargs
+        self.shap_kwargs = shap_kwargs
 
-    def f(X): 
-        model.to(device)
-        with torch.no_grad(): 
-            pred = model(np_to_torch_img(X).to(device))
-            if postprocess:
-                pred = postprocess(pred)
-            return pred.detach().cpu().numpy()
+        self.cls_model = Seg2ClsWrapper(model)
 
-    # By default the Partition explainer is used for all  partition explainer
-    explainer = shap.Explainer(f, masker, **explainer_kwargs)
 
-    # here we use 500 evaluations of the underlying model to estimate the SHAP values
-    shap_values = explainer(X_np, **shap_kwargs)
+    def forward(self, x, t, **kwargs):
+        sk = copy.deepcopy(self.shap_kwargs)
+        sk["outputs"] = t
 
-    if shap_values.values.shape[-1] == 1: 
-        sv = np_to_torch_img(shap_values.values[:,:,:,:,0])
-        return FeatureAttrOutput(sv, shap_values)
-    else: 
-        raise ValueError("Not implemented for explaining more than one output")
+        return explain_image_cls_with_shap(self.cls_model, x, t, self.mask_value, self.explainer_kwargs, sk)
 
