@@ -324,6 +324,8 @@ class SOPConfig(PretrainedConfig):
                  **kwargs):
 
         # all the config from the json file will be in self.__dict__
+        super().__init__(**kwargs)
+
         if json_file is not None:
             self.update_from_json(json_file)
         
@@ -339,7 +341,7 @@ class SOPConfig(PretrainedConfig):
         self.attn_patch_size = attn_patch_size
         self.finetune_layers = finetune_layers
         
-        super().__init__(**kwargs)
+        
     
     def update_from_json(self, json_file):
         with open(json_file, 'r') as f:

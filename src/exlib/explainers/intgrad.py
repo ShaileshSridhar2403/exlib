@@ -1,101 +1,121 @@
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from tqdm import tqdm
-from .common import AttributionOutput
+from .common import *
 
 
-def explain_torch_with_intgrad(X, model,
-                               X0 = None,
-                               labels = None,
-                               num_steps = 100,
-                               progress_bar = False,
-                               postprocess = None):
+def intgrad_image_class_loss_fn(y, label):
+    N, K = y.shape
+    assert len(label) == N
+    # Make sure the dtype is right otherwise loss will be like all zeros
+    loss = torch.zeros_like(label, dtype=y.dtype)
+    for i, l in enumerate(label):
+        loss[i] = y[i,l]
+    return loss
+
+
+def intgrad_image_seg_loss_fn(y, label):
+    N, K, H, W = y.shape
+    assert len(label) == N
+    loss = torch.zeros_like(label, dtype=y.dtype)
+    for i, l in enumerate(label):
+        yi = y[i]
+        inds = yi.argmax(dim=0) # Max along the channels
+        H = F.one_hot(inds, num_classes=K)  # (H,W,K)
+        H = H.permute(2,0,1)   # (K,H,W)
+        L = (yi * H).sum()
+        loss[i] = L
+    return loss
+
+
+# Do classification-based thing
+def explain_image_with_intgrad(x, model, loss_fn,
+                               x0 = None,
+                               num_steps = 32,
+                               progress_bar = False):
     """
     Explain a classification model with Integrated Gradients.
     """
-
     # Default baseline is zeros
-    X0 = torch.zeros_like(X) if X0 is None else X0
-    if X0 is None:
-        X0 = torch.zeros_like(X)
+    x0 = torch.zeros_like(x) if x0 is None else x0
 
-    # Compute the target class if necessary
-    if labels is None:
-        with torch.no_grad():
-            y = model(X)
-        if postprocess:
-            y = postprocess(y)
-        labels = y.argmax(dim=1)
-
-    # The integrated gradients that we accumulate
-    intgrad = torch.zeros_like(X)
+    step_size = 1 / num_steps
+    intg = torch.zeros_like(x)
 
     pbar = tqdm(range(num_steps)) if progress_bar else range(num_steps)
-    with torch.enable_grad():
-        for k in pbar:
-            ak = k / num_steps
-            Xk = X0 + ak * (X - X0)
-            Xk.requires_grad_()
-            y = model(Xk)
-            if postprocess:
-                y = postprocess(y)
-            assert y.ndim == 2 # Because this is batched classification
 
-            y_targets = y[:, labels]
-            y_targets.sum().backward()
+    for k in pbar:
+        ak = k * step_size
+        xk = x0 + ak * (x - x0)
+        xk.requires_grad_()
+        y = model(xk)
 
-            intgrad += Xk.grad / num_steps # Recall that step_size = 1 / num_steps
+        loss = loss_fn(y)
+        loss.sum().backward()
+        intg += xk.grad * step_size
 
-    return AttributionOutput(intgrad, {})
+    return FeatureAttrOutput(intg, {})
 
 
-def explain_torch_with_intgrad_text(X, model,
-                               X0 = None,
-                               labels = None,
-                               num_steps = 100,
-                               progress_bar = False,
-                               postprocess = None,
-                               kwargs = {},
-                               mask_combine=None):
+def explain_cls_with_intgrad(model, x, label,
+                             x0 = None,
+                             num_steps = 32,
+                             progress_bar = False):
     """
     Explain a classification model with Integrated Gradients.
     """
+    assert x.size(0) == len(label)
 
     # Default baseline is zeros
-    X0 = torch.zeros_like(X) if X0 is None else X0
-    if X0 is None:
-        X0 = torch.zeros_like(X)
+    x0 = torch.zeros_like(x) if x0 is None else x0
 
-    # Compute the target class if necessary
-    if labels is None:
-        with torch.no_grad():
-            y = model(X, **kwargs)
-        if postprocess:
-            y = postprocess(y)
-        labels = y.argmax(dim=1)
-
-    # The integrated gradients that we accumulate
-    intgrad = torch.zeros_like(X).float()
+    step_size = 1 / num_steps
+    intg = torch.zeros_like(x)
 
     pbar = tqdm(range(num_steps)) if progress_bar else range(num_steps)
-    with torch.enable_grad():
-        for k in pbar:
-            ak = k / num_steps
-            if mask_combine:
-                mask = ak * torch.ones_like(X[0]).float()
-                Xk = mask_combine(X, mask).squeeze(1)
-                Xk.requires_grad_()
-                y = model(inputs_embeds=Xk, **kwargs)
-            else:
-                Xk = X0 + ak * (X - X0)
-                Xk.requires_grad_()
-                y = model(Xk, **kwargs)
-            if postprocess:
-                y = postprocess(y)
-            assert y.ndim == 2 # Because this is batched classification
+    for k in pbar:
+        ak = k * step_size
+        xk = x0 + ak * (x - x0)
+        xk.requires_grad_()
+        y = model(xk)
 
-            y_targets = y[:, labels]
-            y_targets.sum().backward()
+        loss = 0.0
+        for i, l in enumerate(label):
+            loss += y[i, l]
 
-            intgrad += Xk.grad.sum(-1) / num_steps # Recall that step_size = 1 / num_steps
+        loss.backward()
+        intg += xk.grad * step_size
 
-    return AttributionOutput(intgrad, {})
+    return FeatureAttrOutput(intg, {})
+
+
+class IntGradImageCls(FeatureAttrMethod):
+    """ Image classification with integrated gradients
+    """
+    def __init__(self, model):
+        super().__init__(model)
+
+    def forward(self, x, t, **kwargs):
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor(t)
+
+        return explain_cls_with_intgrad(self.model, x, t, **kwargs)
+
+
+
+class IntGradImageSeg(FeatureAttrMethod):
+    """ Image segmentation with integrated gradients.
+    For this we convert the segmentation model into a classification model.
+    """
+    def __init__(self, model):
+        super().__init__(model)
+
+        self.cls_model = Seg2ClsWrapper(model)
+
+    def forward(self, x, t, **kwargs):
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor(t)
+
+        return explain_cls_with_intgrad(self.cls_model, x, t, **kwargs)
+

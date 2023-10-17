@@ -8,11 +8,10 @@ import torch
 import torch.nn as nn
 from skimage.transform import resize
 from tqdm import tqdm
-from .common import TorchAttribution
-from .common import AttributionOutput
+from .common import FeatureAttrMethod, FeatureAttrOutput
 
 
-class TorchImageRISE(TorchAttribution):
+class TorchImageRISE(FeatureAttrMethod):
     def __init__(self, model, input_size, postprocess=None, \
                  gpu_batch=100, N=2000, \
                  s=8, p1=0.5, seed=42):
@@ -76,10 +75,10 @@ class TorchImageRISE(TorchAttribution):
             sal = torch.matmul(p.permute(1, 2, 0), self.masks.view(N, H * W))
             sal = sal.view(B, CL, H, W)
         
-        return AttributionOutput(sal[range(B), label], sal)
+        return FeatureAttrOutput(sal[range(B), label], sal)
 
 
-class TorchTextRISE(TorchAttribution):
+class TorchTextRISE(FeatureAttrMethod):
     def __init__(self, model, input_size, postprocess=None, \
                  gpu_batch=100, N=500, \
                  s=8, p1=0.5, seed=42, mask_combine=None):
@@ -154,4 +153,4 @@ class TorchTextRISE(TorchAttribution):
             sal = torch.matmul(p.permute(1, 2, 0), self.masks.view(N, L))
             sal = sal.view(B, CL, L)
         
-        return AttributionOutput(sal[range(B), label], sal)
+        return FeatureAttrOutput(sal[range(B), label], sal)
