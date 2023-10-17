@@ -1,3 +1,1 @@
-from .attributions import NNZ
-from .ins_del import InsDel
-from .comp_suff import CompSuff
+from .attributions import NNZ, InsDel, InsDelSem, CompSuff, CompSuffSem
