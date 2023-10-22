@@ -44,6 +44,7 @@ def explain_image_with_intgrad(x, model, loss_fn,
     intg = torch.zeros_like(x)
 
     pbar = tqdm(range(num_steps)) if progress_bar else range(num_steps)
+
     for k in pbar:
         ak = k * step_size
         xk = x0 + ak * (x - x0)
@@ -117,6 +118,4 @@ class IntGradImageSeg(FeatureAttrMethod):
             t = torch.tensor(t)
 
         return explain_cls_with_intgrad(self.cls_model, x, t, **kwargs)
-
-
 

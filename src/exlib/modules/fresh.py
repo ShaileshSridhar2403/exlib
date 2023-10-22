@@ -123,9 +123,9 @@ class FRESH(PreTrainedModel):
         # input
         self.input_attn = TopKAttentionLayer(k=rationale_len)
 
-        if projection_layer is not None:
-            self.projection = copy.deepcopy(projection_layer)
-        elif model_type == 'image':
+        # if projection_layer is not None:
+        #     self.projection = copy.deepcopy(projection_layer)
+        if model_type == 'image':
             self.projection_up = nn.ConvTranspose2d(1, 
                                                     1, 
                                                     kernel_size=self.attn_patch_size, 
@@ -134,12 +134,13 @@ class FRESH(PreTrainedModel):
             self.projection_up.bias = torch.nn.Parameter(torch.zeros_like(self.projection_up.bias))
             self.projection_up.weight.requires_grad = False
             self.projection_up.bias.requires_grad = False
-        else:  # text
-            self.projection = nn.Linear(1, self.proj_hid_size)
+        # else:  # text
+        #     self.projection = nn.Linear(1, self.proj_hid_size)
 
         # Initialize the weights of the model
         self.init_weights()
         self.blackbox_model = blackbox_model
+        self.blackbox_model_pred = copy.deepcopy(blackbox_model)
         if self.finetune_layers_idxs is None:
             self.class_weights = copy.deepcopy(getattr(self.blackbox_model, self.finetune_layers[0]).weight)
             # Freeze the frozen module
@@ -152,49 +153,84 @@ class FRESH(PreTrainedModel):
             for name, param in self.blackbox_model.named_parameters():
                 if sum([f'{self.finetune_layers[i]}.{self.finetune_layers_idxs[i]}' in name for i in range(len(self.finetune_layers))]) == 0: # the name doesn't match any finetune layers
                     param.requires_grad = False
+        
 
-    def forward(self, inputs):
+    def forward(self, inputs, token_type_ids=None, attention_mask=None, pad_token_id=0):
         if self.model_type == 'image':
             bsz, num_channel, img_dim1, img_dim2 = inputs.shape
         else:
             bsz, seq_len = inputs.shape
 
         with torch.no_grad():
-            outputs = self.blackbox_model(
-                inputs,
-                output_attentions=True,
-                return_dict=True
-            )
-            attn = self.postprocess_attn(outputs)
-            input_mask_weights = self.input_attn(attn)
-            # print('input_mask_weights', input_mask_weights.shape)
-            # import pdb
-            # pdb.set_trace()
-            # todo: project attn to pixels
-            num_patches = ((self.image_size[0] - self.attn_patch_size) \
-                           // self.attn_stride_size + 1, 
-                        (self.image_size[1] - self.attn_patch_size) \
-                            // self.attn_stride_size + 1)
-            input_mask_weights = input_mask_weights[:,1:].reshape(-1, 
-                                                            1, 
-                                                            num_patches[0], 
-                                                            num_patches[1])
-            input_mask_weights = self.projection_up(input_mask_weights, 
-                                                    output_size=torch.Size([input_mask_weights.shape[0], 
-                                                                            1, 
-                                                                            img_dim1, 
-                                                                            img_dim2]))
-            input_mask_weights = input_mask_weights.view(bsz, 
-                                                         -1, 
-                                                         img_dim1, 
-                                                         img_dim2)
-            input_mask_weights = torch.clip(input_mask_weights, max=1.0)
-            # import pdb
-            # pdb.set_trace()
+            if self.model_type == 'image':
+                outputs = self.blackbox_model(
+                    inputs,
+                    output_attentions=True,
+                    return_dict=True
+                )
+                attn = self.postprocess_attn(outputs)
+                input_mask_weights = self.input_attn(attn)
+                # print('input_mask_weights', input_mask_weights.shape)
+                # import pdb
+                # pdb.set_trace()
+                # todo: project attn to pixels
+                num_patches = ((self.image_size[0] - self.attn_patch_size) \
+                            // self.attn_stride_size + 1, 
+                            (self.image_size[1] - self.attn_patch_size) \
+                                // self.attn_stride_size + 1)
+                input_mask_weights = input_mask_weights[:,1:].reshape(-1, 
+                                                                1, 
+                                                                num_patches[0], 
+                                                                num_patches[1])
+                input_mask_weights = self.projection_up(input_mask_weights, 
+                                                        output_size=torch.Size([input_mask_weights.shape[0], 
+                                                                                1, 
+                                                                                img_dim1, 
+                                                                                img_dim2]))
+                input_mask_weights = input_mask_weights.view(bsz, 
+                                                            -1, 
+                                                            img_dim1, 
+                                                            img_dim2)
+                input_mask_weights = torch.clip(input_mask_weights, max=1.0)
+                # import pdb
+                # pdb.set_trace()
 
-            masked_inputs = input_mask_weights * inputs
+                masked_inputs = input_mask_weights * inputs
+            else:
+                outputs = self.blackbox_model(
+                    inputs,
+                    token_type_ids=token_type_ids,
+                    attention_mask=attention_mask,
+                    output_attentions=True,
+                    return_dict=True
+                )
+                attn = self.postprocess_attn(outputs)
+                input_mask_weights = self.input_attn(attn)
+                
+                to_keep = (token_type_ids[0] == 1) * attention_mask  # query
+                document_attn = (token_type_ids[0] == 0) * attention_mask * input_mask_weights
+                to_keep = to_keep + document_attn
+                # compress TODO
+                # Step 1: Masking and Compacting
+                masked_inputs = [inputs[i][to_keep[i].bool()] for i in range(to_keep.shape[0])]
+                masked_token_type_ids = [token_type_ids[i][to_keep[i].bool()] for i in range(to_keep.shape[0])]
+                masked_attention_mask = [attention_mask[i][to_keep[i].bool()] for i in range(to_keep.shape[0])]
+
+                # Step 2: Padding
+                max_len = 512
+                padded_inputs = torch.stack([torch.cat([m, torch.zeros(max_len - m.shape[0], device=inputs.device)]) \
+                                             for m in masked_inputs])
+                padded_token_type_ids = torch.stack([torch.cat([m, torch.zeros(max_len - m.shape[0], device=inputs.device)]) \
+                                             for m in masked_token_type_ids])
+                padded_attention_mask = torch.stack([torch.cat([m, torch.zeros(max_len - m.shape[0], device=inputs.device)]) \
+                                             for m in masked_attention_mask])
         
-        outputs = self.blackbox_model(masked_inputs)
+        if self.model_type == 'image':
+            outputs = self.blackbox_model_pred(masked_inputs)
+        else:  # text
+            outputs = self.blackbox_model_pred(padded_inputs.int(),
+                                          token_type_ids=padded_token_type_ids.int(),
+                                          attention_mask=padded_attention_mask.int())
         
         if self.return_tuple: 
             return AttributionOutputFresh(self.postprocess_logits(outputs),
