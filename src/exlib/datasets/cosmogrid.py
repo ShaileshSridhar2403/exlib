@@ -11,12 +11,12 @@ from torch import nn
 
 
 class CosmogridDataset(Dataset):
-    def __init__(self, root_dir, split='train', data_size=-1, mask_suffix=None,
+    def __init__(self, root_dir, split='train', data_size=-1, mask_path=None,
                  mask_transform=None):
         self.split = split
         self.root_dir = root_dir # '/nlp/data/weiqiuy/datasets/cosmogrid'
         self.data_size = data_size
-        self.mask_suffix = mask_suffix
+        self.mask_path = mask_path
         self.mask_transform = mask_transform
         # load cosmological parameters -------
         # Omega_m, H0, ns, sigma_8, w, omega_b
@@ -39,10 +39,8 @@ class CosmogridDataset(Dataset):
         train_y, val_y, test_y = np.split(Yvals, [train_split, train_split+val_split])
         print('x shape', train_x.shape, val_x.shape, test_x.shape)
         print('y shape', train_y.shape, val_y.shape, test_y.shape)
-        if mask_suffix is not None:
-            masks_vals = np.load(os.path.join(root_dir, 'masks',
-                                              f'X_maps_Cosmogrid_100k{mask_suffix}.npy'), 
-                                 allow_pickle=True)
+        if mask_path is not None:
+            masks_vals = np.load(mask_path, allow_pickle=True)
             train_masks, val_masks, test_masks = np.split(masks_vals, 
                                                           [train_split, 
                                                            train_split+val_split])

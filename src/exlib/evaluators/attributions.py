@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from .common import Evaluator
-from .ins_del import InsDel, InsDelSem
+from .ins_del import InsDelCls, InsDelSem, DeletionCls, InsertionCls
 from .comp_suff import CompSuff, CompSuffSem
 
 class NNZ(Evaluator): 
