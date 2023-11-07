@@ -5,15 +5,16 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import PreTrainedModel
+# from transformers import PreTrainedModel
 import collections.abc
 from functools import partial
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
-from transformers import PretrainedConfig, PreTrainedModel
+# from transformers import PretrainedConfig, PreTrainedModel
 import copy
 import json
 from collections import namedtuple
+import os
 
 
 AttributionOutputSOP = namedtuple("AttributionOutputSOP", 
@@ -225,8 +226,6 @@ class GroupGenerateLayer(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
        
-        # self.multihead_attn = nn.MultiheadAttention(hidden_dim, num_heads, 
-        #                                             batch_first=True)
         self.multihead_attns = nn.ModuleList([nn.MultiheadAttention(hidden_dim, 
                                                                    1, 
                                                                    batch_first=True) \
@@ -244,6 +243,9 @@ class GroupGenerateLayer(nn.Module):
         """
         epsilon = 1e-30
 
+        if epoch == -1:
+            epoch = self.num_heads
+        
         head_i = epoch % self.num_heads
         if self.training:
             _, attn_weights = self.multihead_attns[head_i](query, key_value, key_value, 
@@ -270,7 +272,6 @@ class GroupSelectLayer(nn.Module):
         super().__init__()
         
         self.hidden_dim = hidden_dim
-        # self.num_heads = num_heads
         self.multihead_attn = nn.MultiheadAttention(hidden_dim, 1, 
                                                     batch_first=True)
         self.sparsemax = Sparsemax(dim=-1)
@@ -292,11 +293,6 @@ class GroupSelectLayer(nn.Module):
         # Obtain attention weights
         _, attn_weights = self.multihead_attn(query, key, key)
         attn_weights = attn_weights + epsilon  # (batch_size, num_heads, sequence_length, hidden_dim)
-        # attn_output: (batch_size, sequence_length, hidden_dim)
-        # attn_weights: (batch_size, num_heads, sequence_length, hidden_dim)
-        # attn_weights = attn_weights.mean(dim=-2)  # average seq_len number of heads
-        # if we do sparsemax directly, they are all within 0 and 1 and thus don't move. 
-        # need to first transform to log space.
         mask = self.sparsemax(torch.log(attn_weights))
         mask = mask.transpose(-1, -2)
 
@@ -308,7 +304,7 @@ class GroupSelectLayer(nn.Module):
         return attn_outputs, mask
 
 
-class SOPConfig(PretrainedConfig):
+class SOPConfig:
     def __init__(self,
                  json_file=None,
                  hidden_size: int = 512,
@@ -341,15 +337,30 @@ class SOPConfig(PretrainedConfig):
         self.attn_patch_size = attn_patch_size
         self.finetune_layers = finetune_layers
         
-        
-    
     def update_from_json(self, json_file):
         with open(json_file, 'r') as f:
             json_dict = json.load(f)
         self.__dict__.update(json_dict)
 
+    def save_to_json(self, json_file):
+        attrs_save = [
+            'hidden_size',
+            'num_labels',
+            'projected_input_scale',
+            'num_heads',
+            'num_masks_sample',
+            'num_masks_max',
+            'image_size',
+            'num_channels',
+            'attn_patch_size',
+            'finetune_layers'
+        ]
+        to_save = {k: v for k, v in self.__dict__.items() if k in attrs_save}
+        with open(json_file, 'w') as f:
+            json.dump(to_save, f, indent=4)
 
-class SOP(PreTrainedModel):
+
+class SOP(nn.Module):
     config_class = SOPConfig
 
     def __init__(self, 
@@ -357,7 +368,7 @@ class SOP(PreTrainedModel):
                  backbone_model,
                  class_weights
                  ):
-        super().__init__(config)
+        super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size  # match black_box_model hidden_size
         self.num_classes = config.num_labels if hasattr(config, 'num_labels') is not None else 1  # 1 is for regression
@@ -369,7 +380,12 @@ class SOP(PreTrainedModel):
 
         # blackbox model and finetune layers
         self.blackbox_model = backbone_model
-        self.class_weights = copy.deepcopy(class_weights.detach())
+        try:
+            self.class_weights = copy.deepcopy(class_weights)
+            print('deep copy class weights')
+        except:
+            self.class_weights = class_weights.clone()
+            print('shallow copy class weights')
         
         
         self.input_attn = GroupGenerateLayer(hidden_dim=self.hidden_size,
@@ -393,21 +409,20 @@ class SOP(PreTrainedModel):
 
     def forward(self):
         raise NotImplementedError
+    
+    def save(self, save_dir):
+        self.config.save_to_json(os.path.join(save_dir, 'config.json'))
+        torch.save(self.state_dict(), os.path.join(save_dir, 'model.pt'))
+        print('Saved model to {}'.format(save_dir))
 
+    def load(self, save_dir):
+        self.config.update_from_json(os.path.join(save_dir, 'config.json'))
+        self.load_state_dict(torch.load(os.path.join(save_dir, 'model.pt')))
+        print('Loaded model from {}'.format(save_dir))
 
-# class SOPModel(PreTrainedModel):
-#     config_class = SOPConfig
-
-#     def __init__(self, config, backbone_model, class_weights):
-#         super().__init__(config)
-#         self.sop_model = SOP(
-#             config=config,
-#             backbone_model=backbone_model,
-#             class_weights=class_weights
-#         )
-
-#     def forward(self, **inputs):
-#         return self.model.forward(**inputs)
+    def load_checkpoint(self, checkpoint_path):
+        self.load_state_dict(torch.load(checkpoint_path)['model'])
+        print('Loaded model from checkpoint {}'.format(checkpoint_path))
 
 
 class SOPImage(SOP):
@@ -435,7 +450,7 @@ class SOPImage(SOP):
             self.init_projection()
 
         # Initialize the weights of the model
-        self.init_weights()
+        # self.init_weights()
         self.init_grads()
 
     def init_projection(self):
@@ -530,7 +545,8 @@ class SOPImage(SOP):
             # With/without masks are a bit different. Should we make them the same? Need to experiment.
             bsz, num_segs, img_dim1, img_dim2 = segs.shape
             seged_output_0 = inputs.unsqueeze(1) * segs.unsqueeze(2) # (bsz, num_masks, num_channel, img_dim1, img_dim2)
-            interm_outputs, _ = self.run_backbone(seged_output_0, mask_batch_size)
+            # import pdb; pdb.set_trace()
+            _, interm_outputs = self.run_backbone(seged_output_0, mask_batch_size)
             
             interm_outputs = interm_outputs.view(bsz, -1, self.hidden_size)
             interm_outputs = interm_outputs * self.projected_input_scale
@@ -577,9 +593,10 @@ class SOPImageCls(SOPImage):
         query = self.class_weights.unsqueeze(0).expand(bsz, 
                                                     self.num_classes, 
                                                     self.hidden_size) #.to(logits.device)
-       
+        
         key = pooler_outputs
         weighted_logits, output_mask_weights = self.output_attn(query, key, logits)
+
         return weighted_logits, output_mask_weights, logits, pooler_outputs
     
     def get_results_tuple(self, weighted_logits, logits, pooler_outputs, input_mask_weights, output_mask_weights, bsz, label):
@@ -629,6 +646,7 @@ class SOPImageSeg(SOPImage):
         pooler_outputs.requires_grad = True
         key = pooler_outputs.view(bsz, num_masks, self.hidden_size, -1).mean(-1)
         weighted_logits, output_mask_weights = self.output_attn(query, key, logits)
+
         return weighted_logits, output_mask_weights, logits, pooler_outputs
     
     def get_results_tuple(self, weighted_logits, logits, pooler_outputs, input_mask_weights, output_mask_weights, bsz, label):

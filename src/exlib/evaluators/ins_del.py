@@ -6,10 +6,10 @@ import numpy as np
 from scipy.ndimage.filters import gaussian_filter
 from .common import Evaluator, convert_idx_masks_to_bool
 
-class InsDel(Evaluator):
+class InsDelCls(Evaluator):
 
-    def __init__(self, model, mode, step, substrate_fn, postprocess=None, 
-                 task_type='cls'):
+    def __init__(self, model, mode='del', step=224, substrate_fn=torch.zeros_like, 
+                 postprocess=None):
         """Create deletion/insertion metric instance.
         Args:
             model (nn.Module): Black-box model being explained.
@@ -17,12 +17,10 @@ class InsDel(Evaluator):
             step (int): number of pixels modified per one iteration.
             substrate_fn (func): a mapping from old pixels to new pixels.
         """
-        super(InsDel, self).__init__(model, postprocess)
+        super(InsDelCls, self).__init__(model, postprocess)
         
         assert mode in ['del', 'ins']
-        assert task_type in ['cls', 'reg']
         self.mode = mode
-        self.task_type = task_type
         self.step = step
         self.substrate_fn = substrate_fn
 
@@ -30,12 +28,12 @@ class InsDel(Evaluator):
         """Returns normalized Area Under Curve of the array."""
         # return (arr.sum() - arr[0] / 2 - arr[-1] / 2) / (arr.shape[0] - 1)
         # return (arr.sum(-1).sum(-1) - arr[1] / 2 - arr[-1] / 2) / (arr.shape[1] - 1)
-        if len(arr.shape) == 2:
-            return (arr.sum(-1) - arr[:, 0] / 2 - arr[:, -1] / 2) / (arr.shape[1] - 1)
-        else:
-            return (arr.sum(-2) - arr[:, 0] / 2 - arr[:, -2] / 2) / (arr.shape[1] - 1)
+        # if len(arr.shape) == 2:
+        return (arr.sum(-1) - arr[:, 0] / 2 - arr[:, -1] / 2) / (arr.shape[1] - 1)
+        # else:
+        #     return (arr.sum(-2) - arr[:, 0] / 2 - arr[:, -2] / 2) / (arr.shape[1] - 1)
 
-    def forward(self, X, Z, kwargs=None, return_dict=False):
+    def forward(self, X, Z, kwargs={}, return_dict=False):
         """Run metric on one image-saliency pair.
             Args:
                 X = img_tensor (Tensor): normalized image tensor. (bsz, n_channel, img_dim1, img_dim2)
@@ -49,33 +47,19 @@ class InsDel(Evaluator):
                 scores (Tensor): Array containing scores at every step.
         """
         self.model.eval()
-        # import pdb
-        # pdb.set_trace()
+
         img_tensor = X
         explanation = Z
-        if len(X.shape) == 4: # image
-            bsz, n_channel, img_dim1, img_dim2 = X.shape
-            HW = img_dim1 * img_dim2
-            model_type = 'image'
-        else: # text
-            bsz, seq_len = X.shape
-            HW = seq_len
-            n_channel = 1
-            model_type = 'text'
+
+        bsz, n_channel, img_dim1, img_dim2 = X.shape
+        HW = img_dim1 * img_dim2
+
         with torch.no_grad():
-            if kwargs:
-                pred = self.model(img_tensor, **kwargs)
-            else:
-                pred = self.model(img_tensor)
+            pred = self.model(img_tensor, **kwargs)
             if self.postprocess is not None:
                 pred = self.postprocess(pred)
-        if self.task_type == 'cls':
-            top, c = torch.max(pred, 1)
-        else:
-            c = torch.arange(pred.shape[-1])
-            # import pdb
-            # pdb.set_trace()
-        # c = c.cpu().numpy()[0]
+        top, c = torch.max(pred, 1)
+
         n_steps = (HW + self.step - 1) // self.step
 
         if self.mode == 'del':
@@ -94,10 +78,7 @@ class InsDel(Evaluator):
         finish[finish > 1] = 1.0
         all_states = []
 
-        if self.task_type == 'cls':
-            scores = torch.zeros(bsz, n_steps + 1).cuda()
-        else:
-            scores = torch.zeros(bsz, n_steps + 1, len(c)).cuda()
+        scores = torch.zeros(bsz, n_steps + 1).cuda()
         
         # Coordinates of pixels in order of decreasing saliency
         t_r = explanation.reshape(bsz, -1, HW)
@@ -106,31 +87,18 @@ class InsDel(Evaluator):
 
         for i in tqdm(range(n_steps+1)):
             with torch.no_grad():
-                if kwargs:
-                    pred_mod = self.model(start, **kwargs)
-                else:
-                    pred_mod = self.model(start)
+                pred_mod = self.model(start, **kwargs)
                 if self.postprocess is not None:
                     pred_mod = self.postprocess(pred_mod)
-            if self.task_type == 'cls':
-                pred_mod = torch.softmax(pred_mod, dim=-1)
-                # import pdb
-                # pdb.set_trace()
-                scores[:,i] = pred_mod[range(bsz), c]
-            else:
-                criterion = nn.MSELoss(reduction='none')
-                mod_loss = criterion(pred_mod, pred)
-                scores[:,i] = mod_loss
+            pred_mod = torch.softmax(pred_mod, dim=-1)
+            scores[:,i] = pred_mod[range(bsz), c]
             # Render image if verbose, if it's the last step or if save is required.
             
             if i < n_steps:
                 coords = salient_order[:, :, self.step * i:self.step * (i + 1)]
                 batch_indices = torch.arange(bsz).view(-1, 1, 1).to(coords.device)
 
-                if model_type == 'image':
-                    channel_indices = torch.arange(n_channel).view(1, -1, 1).to(coords.device)
-                else:  # text
-                    channel_indices = 0
+                channel_indices = torch.arange(n_channel).view(1, -1, 1).to(coords.device)
                 start.reshape(bsz, n_channel, HW)[batch_indices, 
                                                   channel_indices, 
                                                   coords] = finish.reshape(bsz, n_channel, HW)[batch_indices, 
@@ -154,7 +122,8 @@ class InsDel(Evaluator):
         else:
             return auc_score
     
-    def plot(self, n_steps, start, scores, save_to=None):
+    def plot(self, img_tensor, scores, save_to=None):
+        n_steps = scores.shape[-1] - 1
         i = n_steps
         if self.mode == 'del':
             title = 'Deletion game'
@@ -167,7 +136,7 @@ class InsDel(Evaluator):
         plt.title('{} {:.1f}%, P={:.4f}'.format(ylabel, 100 * i / n_steps, 
                                                 scores[i]))
         plt.axis('off')
-        plt.imshow(start[0].cpu().numpy().transpose(1, 2, 0))
+        plt.imshow(img_tensor.cpu().numpy().transpose(1, 2, 0))
 
         plt.subplot(122)
         plt.plot(np.arange(i+1) / n_steps, scores[:i+1].cpu().numpy())
@@ -202,12 +171,33 @@ class InsDel(Evaluator):
             kern[i, i] = k
         return kern
     
+    @classmethod
+    def get_gaussian_kernel(cls, klen=11, nsig=5, channels=3):
+        """Returns a Gaussian kernel tensor.
+        Convolution with it results in image blurring."""
+        kernel = cls.gkern(klen=klen, nsig=nsig, num_channels=channels)
+        return kernel
+    
+
+class DeletionCls(InsDelCls):
+
+    def __init__(self, model, step=224, substrate_fn=torch.zeros_like, 
+                 postprocess=None):
+        mode = 'del'
+        super(DeletionCls, self).__init__(model, mode, step, substrate_fn, postprocess)
 
 
-class InsDelSem(InsDel):
+class InsertionCls(InsDelCls):
 
-    def __init__(self, model, mode, step, substrate_fn, postprocess=None,
-                 task_type='cls'):
+    def __init__(self, model, step=224, substrate_fn=torch.zeros_like, 
+                 postprocess=None):
+        mode = 'ins'
+        super(InsertionCls, self).__init__(model, mode, step, substrate_fn, postprocess)
+
+
+class InsDelSem(InsDelCls):
+
+    def __init__(self, model, mode, step, substrate_fn, postprocess=None):
         """Create deletion/insertion metric instance.
         Args:
             model (nn.Module): Black-box model being explained.
@@ -215,10 +205,9 @@ class InsDelSem(InsDel):
             step (int): number of pixels modified per one iteration.
             substrate_fn (func): a mapping from old pixels to new pixels.
         """
-        super(InsDelSem, self).__init__(model, mode, step, substrate_fn, postprocess, 
-                                        task_type)
+        super(InsDelSem, self).__init__(model, mode, step, substrate_fn, postprocess)
 
-    def forward(self, X, Z, sem_part, kwargs=None, return_dict=False):
+    def forward(self, X, Z, sem_part, kwargs={}, return_dict=False):
         """Run metric on one image-saliency pair.
             Args:
                 X = img_tensor (Tensor): normalized image tensor. (bsz, n_channel, img_dim1, img_dim2)
@@ -243,28 +232,15 @@ class InsDelSem(InsDel):
 
             img_tensor = X[b_i:b_i+1]
             explanation = Z[b_i:b_i+1].to(img_tensor.device)
-            if len(X.shape) == 4:
-                bsz, n_channel, img_dim1, img_dim2 = img_tensor.shape
-                HW = img_dim1 * img_dim2
-                model_type = 'image'
-            else:
-                bsz, seq_len = img_tensor.shape
-                HW = seq_len
-                n_channel = 1
-                model_type = 'text'
-            if kwargs:
-                kwargs_i = {k: v[b_i:b_i+1] for k, v in kwargs.items()}
+
+            bsz, n_channel, img_dim1, img_dim2 = img_tensor.shape
+            HW = img_dim1 * img_dim2
+            kwargs_i = {k: v[b_i:b_i+1] for k, v in kwargs.items()}
             with torch.no_grad():
-                if kwargs:
-                    pred = self.model(img_tensor, **kwargs_i)
-                else:
-                    pred = self.model(img_tensor)
+                pred = self.model(img_tensor, **kwargs_i)
                 if self.postprocess is not None:
                     pred = self.postprocess(pred)
-            if self.task_type == 'cls':
-                top, c = torch.max(pred, 1)
-            else:
-                c = torch.arange(pred.shape[-1])
+            top, c = torch.max(pred, 1)
 
             if self.mode == 'del':
                 start = img_tensor.clone()
@@ -284,38 +260,21 @@ class InsDelSem(InsDel):
 
             n_steps = len(salient_order_masks)
 
-            if self.task_type == 'cls':
-                scores = torch.empty(bsz, n_steps + 1).cuda()
-            else:
-                scores = torch.empty(bsz, n_steps + 1, len(c)).cuda()
+            scores = torch.empty(bsz, n_steps + 1).cuda()
             # Coordinates of pixels in order of decreasing saliency
             for i in range(n_steps+1):
                 with torch.no_grad():
-                    if kwargs:
-                        pred_mod = self.model(start, **kwargs_i)
-                    else:
-                        pred_mod = self.model(start)
+                    pred_mod = self.model(start, **kwargs_i)
                     if self.postprocess is not None:
                         pred_mod = self.postprocess(pred_mod)
-                if self.task_type == 'cls':
-                    pred_mod = torch.softmax(pred, dim=-1)
-                    scores[:,i] = pred_mod[range(bsz), c]
-                else:
-                    criterion = nn.MSELoss(reduction='none')
-                    # import pdb
-                    # pdb.set_trace()
-                    mod_loss = criterion(pred_mod, pred)
-                    scores[:,i] = mod_loss
+
+                pred_mod = torch.softmax(pred, dim=-1)
+                scores[:,i] = pred_mod[range(bsz), c]
+                
                 if i < n_steps:
                     mask_sem_best = sem_part_bool[salient_order_masks[i]]
-                    if model_type == 'image':
-                        start[0,:,mask_sem_best] = finish[0,:,mask_sem_best]
-                    else:
-                        start[0,mask_sem_best] = finish[0,mask_sem_best]
+                    start[0,:,mask_sem_best] = finish[0,:,mask_sem_best]
 
-            # import pdb
-            # pdb.set_trace()
-            
             auc_score = self.auc(scores)
             
             auc_score_all.append(auc_score)

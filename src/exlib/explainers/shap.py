@@ -20,11 +20,10 @@ def explain_image_cls_with_shap(model, x, t, mask_value, explainer_kwargs, shap_
 
     # here we use 500 evaluations of the underlying model to estimate the SHAP values
     shap_out = explainer(x_np, **shap_kwargs)
-    shap_values = torch.from_numpy(shap_out.values) # (N,H,W,C,T)
-    shap_values = shap_values.permute(0,4,3,1,2)    # (N,T,C,H,W)
+    shap_values = torch.from_numpy(shap_out.values).permute(0,3,1,2,4) # (N,H,W,C,num_classes)
     svs = []
     for i in range(x.size(0)):
-        svs.append(shap_values[i,t[i],:,:,:])
+        svs.append(shap_values[i,:,:,:,t[i]])
     svs = torch.stack(svs)
     return FeatureAttrOutput(svs, shap_out)
 

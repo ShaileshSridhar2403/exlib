@@ -90,4 +90,3 @@ def np_to_torch_img(x_np):
         return x.permute(2,0,1)
     else: 
         raise ValueError("Image array doesn't have 3 or 4 dimensions")
-
