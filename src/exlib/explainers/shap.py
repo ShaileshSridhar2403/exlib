@@ -39,7 +39,7 @@ class ShapImageCls(FeatureAttrMethod):
 
     def forward(self, x, t, **kwargs):
         sk = copy.deepcopy(self.shap_kwargs)
-        sk["outputs"] = t
+        # sk["outputs"] = t # Anton: I'm not 100% sure what this does, it _may_ help ... or not
 
         return explain_image_cls_with_shap(self.model, x, t, self.mask_value, self.explainer_kwargs, sk)
 
