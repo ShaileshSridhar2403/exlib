@@ -1,1 +1,1 @@
-from .attributions import NNZ, InsDelCls, InsDelSem, CompSuff, CompSuffSem
+from .attributions import NNZ, InsDelCls, DeletionCls, InsertionCls, GroupedInsDelCls, GroupedDeletionCls, GroupedInsertionCls

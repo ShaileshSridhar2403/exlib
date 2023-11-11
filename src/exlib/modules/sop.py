@@ -29,6 +29,74 @@ AttributionOutputSOP = namedtuple("AttributionOutputSOP",
                                    "flat_masks"])
 
 
+def convert_idx_masks_to_bool(masks):
+    """
+    input: masks (1, img_dim1, img_dim2)
+    output: masks_bool (num_masks, img_dim1, img_dim2)
+    """
+    unique_idxs = torch.sort(torch.unique(masks)).values
+    idxs = unique_idxs.view(-1, 1, 1)
+    broadcasted_masks = masks.expand(unique_idxs.shape[0], 
+                                     masks.shape[1], 
+                                     masks.shape[2])
+    masks_bool = (broadcasted_masks == idxs)
+    return masks_bool
+
+
+def get_mask_transform(num_masks_max=200, processor=None):
+    def mask_transform(mask):
+        seg_mask_cut_off = num_masks_max
+        # Preprocess the mask using the ViTImageProcessor
+        if len(mask.shape) == 2 and mask.dtype == torch.bool:
+            mask_dim1, mask_dim2 = mask.shape
+            mask = mask.unsqueeze(0).expand(3, 
+                                            mask_dim1, 
+                                            mask_dim2).float()
+            if processor is not None:
+                inputs = processor(mask, 
+                                do_rescale=False, 
+                                do_normalize=False,
+                                return_tensors='pt')
+                # (1, 3, 224, 224)
+                return inputs['pixel_values'][0][0]
+            else:
+                return mask
+        else: # len(mask.shape) == 3
+            if mask.dtype != torch.bool:
+                if len(mask.shape) == 2:
+                    mask = mask.unsqueeze(0)
+                mask = convert_idx_masks_to_bool(mask)
+            bsz, mask_dim1, mask_dim2 = mask.shape
+            mask = mask.unsqueeze(1).expand(bsz, 
+                                            3, 
+                                            mask_dim1, 
+                                            mask_dim2).float()
+
+            if bsz < seg_mask_cut_off:
+                repeat_count = seg_mask_cut_off // bsz + 1
+                mask = torch.cat([mask] * repeat_count, dim=0)
+
+            # add additional mask afterwards
+            mask_sum = torch.sum(mask[:seg_mask_cut_off - 1], dim=0, keepdim=True).bool()
+            if False in mask_sum:
+                mask = mask[:seg_mask_cut_off - 1]
+                compensation_mask = (1 - mask_sum.int()).bool()
+                mask = torch.cat([mask, compensation_mask])
+            else:
+                mask = mask[:seg_mask_cut_off]
+
+            if processor is not None:
+                inputs = processor(mask, 
+                                do_rescale=False, 
+                                do_normalize=False,
+                                return_tensors='pt')
+                
+                return inputs['pixel_values'][:,0]
+            else:
+                return mask[:,0]
+    return mask_transform
+
+
 def get_chained_attr(obj, attr_chain):
     attrs = attr_chain.split(".")
     for attr in attrs:
@@ -307,35 +375,58 @@ class GroupSelectLayer(nn.Module):
 class SOPConfig:
     def __init__(self,
                  json_file=None,
-                 hidden_size: int = 512,
-                 num_labels: int = 2,
-                 projected_input_scale: int = 1,
-                 num_heads: int = 1,
-                 num_masks_sample: int = 20,
-                 num_masks_max: int = 200,
-                 image_size=(224, 224),
-                 num_channels: int = 3,
-                 attn_patch_size: int = 16,
-                 finetune_layers=[],
-                 **kwargs):
-
+                 hidden_size: int = None,
+                 num_labels: int = None,
+                 projected_input_scale: int = None,
+                 num_heads: int = None,
+                 num_masks_sample: int = None,
+                 num_masks_max: int = None,
+                 image_size=None,
+                 num_channels: int = None,
+                 attn_patch_size: int = None,
+                 finetune_layers=None,
+                ):
         # all the config from the json file will be in self.__dict__
-        super().__init__(**kwargs)
+        super().__init__()
 
+        # set default values
+        self.hidden_size = 512
+        self.num_labels = 2
+        self.projected_input_scale = 1
+        self.num_heads = 1
+        self.num_masks_sample = 20
+        self.num_masks_max = 200
+        self.image_size=(224, 224)
+        self.num_channels = 3
+        self.attn_patch_size = 16
+        self.finetune_layers=[]
+
+        # first load the config from json file if specified
         if json_file is not None:
             self.update_from_json(json_file)
         
         # overwrite the config from json file if specified
-        self.hidden_size = hidden_size
-        self.num_labels = num_labels
-        self.projected_input_scale = projected_input_scale
-        self.num_heads = num_heads
-        self.num_masks_sample = num_masks_sample
-        self.num_masks_max = num_masks_max
-        self.image_size = image_size
-        self.num_channels = num_channels
-        self.attn_patch_size = attn_patch_size
-        self.finetune_layers = finetune_layers
+        if hidden_size is not None:
+            self.hidden_size = hidden_size
+        if num_labels is not None: 
+            self.num_labels = num_labels
+        if projected_input_scale is not None:
+            self.projected_input_scale = projected_input_scale
+        if num_heads is not None:
+            self.num_heads = num_heads
+        if num_masks_sample is not None:
+            self.num_masks_sample = num_masks_sample
+        if num_masks_max is not None:
+            self.num_masks_max = num_masks_max
+        if image_size is not None:
+            self.image_size = image_size
+        if num_channels is not None:
+            self.num_channels = num_channels
+        if attn_patch_size is not None:
+            self.attn_patch_size = attn_patch_size
+        if finetune_layers is not None:
+            self.finetune_layers = finetune_layers
+
         
     def update_from_json(self, json_file):
         with open(json_file, 'r') as f:
@@ -366,7 +457,7 @@ class SOP(nn.Module):
     def __init__(self, 
                  config,
                  backbone_model,
-                 class_weights
+                 class_weights=None
                  ):
         super().__init__()
         self.config = config
@@ -380,6 +471,11 @@ class SOP(nn.Module):
 
         # blackbox model and finetune layers
         self.blackbox_model = backbone_model
+        if class_weights is None:
+            try:
+                class_weights = get_chained_attr(backbone_model, config.finetune_layers[0]).weight
+            except:
+                raise ValueError('class_weights is None and cannot be inferred from backbone_model')
         try:
             self.class_weights = copy.deepcopy(class_weights)
             print('deep copy class weights')
@@ -416,8 +512,9 @@ class SOP(nn.Module):
         print('Saved model to {}'.format(save_dir))
 
     def load(self, save_dir):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.config.update_from_json(os.path.join(save_dir, 'config.json'))
-        self.load_state_dict(torch.load(os.path.join(save_dir, 'model.pt')))
+        self.load_state_dict(torch.load(os.path.join(save_dir, 'model.pt'), map_location=device))
         print('Loaded model from {}'.format(save_dir))
 
     def load_checkpoint(self, checkpoint_path):
@@ -429,7 +526,7 @@ class SOPImage(SOP):
     def __init__(self, 
                  config,
                  blackbox_model,
-                 class_weights,
+                 class_weights=None,
                  projection_layer=None,
                  ):
         super().__init__(config,

@@ -8,20 +8,30 @@ from tqdm import tqdm
 import scipy.io
 import pickle
 from torch import nn
+from ..modules.sop import get_mask_transform
 
 
 class CosmogridDataset(Dataset):
-    def __init__(self, root_dir, split='train', data_size=-1, mask_path=None,
-                 mask_transform=None):
+    def __init__(self, data_dir, split='train', data_size=-1, mask_path=None,
+                 inputs_filename='X_maps_Cosmogrid_100k.npy',
+                 labels_filename='y_maps_Cosmogrid_100k.npy',
+                 mask_transform=None,
+                 num_masks_max=200,
+                 download=False):
+        if download: 
+            raise ValueError("download not implemented")
+        
         self.split = split
-        self.root_dir = root_dir # '/nlp/data/weiqiuy/datasets/cosmogrid'
+        self.data_dir = data_dir # '/nlp/data/weiqiuy/datasets/cosmogrid'
         self.data_size = data_size
         self.mask_path = mask_path
+        if mask_transform is None:
+            mask_transform = get_mask_transform(num_masks_max=num_masks_max)
         self.mask_transform = mask_transform
         # load cosmological parameters -------
         # Omega_m, H0, ns, sigma_8, w, omega_b
-        Xvals = np.load(os.path.join(root_dir, 'X_maps_Cosmogrid_100k.npy'), allow_pickle=True)
-        Yvals = np.load(os.path.join(root_dir, 'y_maps_Cosmogrid_100k.npy'), allow_pickle=True)
+        Xvals = np.load(os.path.join(data_dir, inputs_filename), allow_pickle=True)
+        Yvals = np.load(os.path.join(data_dir, labels_filename), allow_pickle=True)
 
         # number of samples
         num_samples = len(Yvals)
@@ -34,7 +44,8 @@ class CosmogridDataset(Dataset):
         print('# samples used for validation:', val_split)
         print('# samples used for testing:' ,test_split)
         print('# total samples:', train_split+val_split+test_split)
-
+        
+        np.random.seed(42)
         train_x, val_x, test_x = np.split(Xvals, [train_split, train_split+val_split])
         train_y, val_y, test_y = np.split(Yvals, [train_split, train_split+val_split])
         print('x shape', train_x.shape, val_x.shape, test_x.shape)
@@ -98,7 +109,7 @@ class CosmogridDataset(Dataset):
             return image, label, mask, mask_i
         else:
             return image, label
-
+        
 
 class ModelOutput:
     def __init__(self, logits, pooler_output):

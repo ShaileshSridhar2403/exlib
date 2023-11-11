@@ -69,13 +69,11 @@ class InsDelCls(Evaluator):
             start = self.substrate_fn(img_tensor)
             finish = img_tensor.clone()
         start_clone = start.clone()
-        # import pdb
-        # pdb.set_trace()
 
-        start[start < 0] = 0.0
-        start[start > 1] = 1.0
-        finish[finish < 0] = 0.0
-        finish[finish > 1] = 1.0
+        # start[start < 0] = 0.0
+        # start[start > 1] = 1.0
+        # finish[finish < 0] = 0.0
+        # finish[finish > 1] = 1.0
         all_states = []
 
         scores = torch.zeros(bsz, n_steps + 1).cuda()
@@ -195,9 +193,9 @@ class InsertionCls(InsDelCls):
         super(InsertionCls, self).__init__(model, mode, step, substrate_fn, postprocess)
 
 
-class InsDelSem(InsDelCls):
+class GroupedInsDelCls(InsDelCls):
 
-    def __init__(self, model, mode, step, substrate_fn, postprocess=None):
+    def __init__(self, model, mode='del', substrate_fn=torch.zeros_like, postprocess=None):
         """Create deletion/insertion metric instance.
         Args:
             model (nn.Module): Black-box model being explained.
@@ -205,9 +203,19 @@ class InsDelSem(InsDelCls):
             step (int): number of pixels modified per one iteration.
             substrate_fn (func): a mapping from old pixels to new pixels.
         """
-        super(InsDelSem, self).__init__(model, mode, step, substrate_fn, postprocess)
+        step = 1
+        super(GroupedInsDelCls, self).__init__(model, mode, step, substrate_fn, postprocess)
+    
+    def auc(self, arr, step_sizes):
+        """Returns normalized Area Under Curve of the array."""
+        return ((arr[:, 1:] + arr[:, :-1] * step_sizes[1:]) / 2).sum() / step_sizes.sum()
+        # return (arr.sum(-1) - arr[:, 0] / 2 - arr[:, -1] / 2) / (step_sizes)
+        # return (arr.sum() - arr[0] / 2 - arr[-1] / 2) / (arr.shape[0] - 1)
+        # return (arr.sum(-1).sum(-1) - arr[1] / 2 - arr[-1] / 2) / (arr.shape[1] - 1)
+        # if len(arr.shape) == 2:
+        return (arr.sum(-1) - arr[:, 0] / 2 - arr[:, -1] / 2) / (arr.shape[1] - 1)
 
-    def forward(self, X, Z, sem_part, kwargs={}, return_dict=False):
+    def forward(self, X, Z, group_mask, kwargs={}, return_dict=False):
         """Run metric on one image-saliency pair.
             Args:
                 X = img_tensor (Tensor): normalized image tensor. (bsz, n_channel, img_dim1, img_dim2)
@@ -226,9 +234,10 @@ class InsDelSem(InsDelCls):
         scores_all = []
         starts = []
         finishes = []
+        step_sizes_all = []
         for b_i in range(X.size(0)):
-            sem_part_bool = convert_idx_masks_to_bool(sem_part[b_i:b_i+1])
-            num_masks = sem_part_bool.size(0)
+            group_mask_bool = convert_idx_masks_to_bool(group_mask[b_i:b_i+1])
+            num_masks = group_mask_bool.size(0)
 
             img_tensor = X[b_i:b_i+1]
             explanation = Z[b_i:b_i+1].to(img_tensor.device)
@@ -248,19 +257,21 @@ class InsDelSem(InsDelCls):
             elif self.mode == 'ins':
                 start = self.substrate_fn(img_tensor)
                 finish = img_tensor.clone()
+            start_clone = start.clone()
 
-            start[start < 0] = 0.0
-            start[start > 1] = 1.0
-            finish[finish < 0] = 0.0
-            finish[finish > 1] = 1.0
+            # start[start < -1] = -1.0
+            # start[start > 1] = 1.0
+            # finish[finish < -1] = 
+            # finish[finish > 1] = 1.0
 
-            t_r_masks = (explanation * sem_part_bool.unsqueeze(1).float()).reshape(num_masks, 
+            t_r_masks = (explanation * group_mask_bool.unsqueeze(1).float()).reshape(num_masks, 
                                                                                 -1).mean(-1)
             salient_order_masks = torch.argsort(t_r_masks, dim=-1).flip(-1)
 
             n_steps = len(salient_order_masks)
 
             scores = torch.empty(bsz, n_steps + 1).cuda()
+            step_sizes = [0]
             # Coordinates of pixels in order of decreasing saliency
             for i in range(n_steps+1):
                 with torch.no_grad():
@@ -268,26 +279,82 @@ class InsDelSem(InsDelCls):
                     if self.postprocess is not None:
                         pred_mod = self.postprocess(pred_mod)
 
-                pred_mod = torch.softmax(pred, dim=-1)
+                pred_mod = torch.softmax(pred_mod, dim=-1)
                 scores[:,i] = pred_mod[range(bsz), c]
                 
                 if i < n_steps:
-                    mask_sem_best = sem_part_bool[salient_order_masks[i]]
+                    mask_sem_best = group_mask_bool[salient_order_masks[i]]
                     start[0,:,mask_sem_best] = finish[0,:,mask_sem_best]
+                    step_sizes.append(mask_sem_best.sum().item())
+                # import pdb; pdb.set_trace()
 
-            auc_score = self.auc(scores)
+            # import pdb; pdb.set_trace()
+            step_sizes = torch.tensor(step_sizes).to(scores.device)
+            auc_score = self.auc(scores, step_sizes)
             
             auc_score_all.append(auc_score)
-            scores_all.append(scores)
-            starts.append(start)
+            scores_all.append(scores[0])
+            starts.append(start_clone)
             finishes.append(finish)
+            step_sizes_all.append(step_sizes)
         
         if return_dict:
             return {
                 'auc_score': torch.stack(auc_score_all),
                 'scores': scores_all,
                 'start': torch.stack(starts),
-                'finish': torch.stack(finishes)
+                'finish': torch.stack(finishes),
+                'step_sizes': step_sizes_all
             }
         else:
             return torch.stack(auc_score_all)
+        
+    def plot(self, img_tensor, explanation, scores, step_sizes, save_to=None):
+        n_steps = scores.shape[-1] - 1
+        i = n_steps
+        step_sizes_cum_sum_frac = (step_sizes.cumsum(-1) / step_sizes.sum())
+        if self.mode == 'del':
+            title = 'Deletion game'
+            ylabel = 'Pixels deleted'
+        elif self.mode == 'ins':
+            title = 'Insertion game'
+            ylabel = 'Pixels inserted'
+        plt.figure(figsize=(10, 5))
+        plt.subplot(121)
+        plt.title('{} {:.1f}%, P={:.4f}'.format(ylabel, 100 * i / n_steps, 
+                                                scores[i]))
+        plt.axis('off')
+        plt.imshow(img_tensor.cpu().numpy().transpose(1, 2, 0))
+        plt.imshow(explanation.cpu().numpy().transpose(1, 2, 0), alpha=0.5, cmap='jet')
+
+        plt.subplot(122)
+        plt.plot(step_sizes_cum_sum_frac.cpu().numpy(), scores.cpu().numpy())
+        plt.xlim(-0.1, 1.1)
+        plt.ylim(0, 1.05)
+        plt.fill_between(step_sizes_cum_sum_frac.cpu().numpy(), 0, 
+                         scores.cpu().numpy(), 
+                         alpha=0.4)
+        plt.title(title)
+        plt.xlabel(ylabel)
+        # plt.ylabel(get_class_name(c))
+        if save_to:
+            plt.savefig(save_to)
+            plt.close()
+        else:
+            plt.show()
+
+
+class GroupedDeletionCls(GroupedInsDelCls):
+
+    def __init__(self, model, substrate_fn=torch.zeros_like, 
+                 postprocess=None):
+        mode = 'del'
+        super(GroupedDeletionCls, self).__init__(model, mode, substrate_fn, postprocess)
+
+
+class GroupedInsertionCls(GroupedInsDelCls):
+
+    def __init__(self, model, substrate_fn=torch.zeros_like, 
+                 postprocess=None):
+        mode = 'ins'
+        super(GroupedInsertionCls, self).__init__(model, mode, substrate_fn, postprocess)
