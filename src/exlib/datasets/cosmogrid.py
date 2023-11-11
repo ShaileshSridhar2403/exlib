@@ -22,7 +22,7 @@ class CosmogridDataset(Dataset):
             raise ValueError("download not implemented")
         
         self.split = split
-        self.data_dir = data_dir # '/nlp/data/weiqiuy/datasets/cosmogrid'
+        self.data_dir = data_dir
         self.data_size = data_size
         self.mask_path = mask_path
         if mask_transform is None:
@@ -91,8 +91,6 @@ class CosmogridDataset(Dataset):
         print(f'-- SPLIT {split} --')
         print('max', self.images.max().item())
         print('min', self.images.min().item())
-        # print('mean', self.images.mean().item())
-        # print('mode', self.images.view(-1).mode().values.item())
 
         print(f'Finished loading {len(self.labels)} {split} images ... ')
 
