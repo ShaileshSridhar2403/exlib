@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn as nn
 
 from skimage.data import astronaut
 from skimage.color import rgb2gray
@@ -8,8 +9,9 @@ from skimage.segmentation import felzenszwalb, slic, quickshift, watershed
 from skimage.segmentation import mark_boundaries
 from skimage.util import img_as_float
 
-class Superpixels:
+class Superpixels(nn.Module):
     def __init__(self, method, **kwargs):
+        super().__init__()
         self.method = method
         self.kwargs = kwargs
         self.set_defaults()
@@ -34,7 +36,7 @@ class Superpixels:
         else:
             raise ValueError(f'Unknown method: {self.method}')
 
-    def __call__(self, x):
+    def forward(self, x):
         device = x.device
         bsz = x.shape[0]
         segments = torch.zeros(bsz, 1, *x.shape[-2:], dtype=int)
@@ -54,3 +56,24 @@ class Superpixels:
             return watershed(gradient, **self.kwargs)
         else:
             raise ValueError(f'Unknown method: {self.method}')
+
+
+class Felzenszwalb(Superpixels):
+    def __init__(self, **kwargs):
+        super().__init__('felzenszwalb', **kwargs)
+
+
+class Slic(Superpixels):
+    def __init__(self, **kwargs):
+        super().__init__('slic', **kwargs)
+
+
+class Quickshift(Superpixels):
+    def __init__(self, **kwargs):
+        super().__init__('quickshift', **kwargs)
+
+
+class Watershed(Superpixels):
+    def __init__(self, **kwargs):
+        super().__init__('watershed', **kwargs)
+
