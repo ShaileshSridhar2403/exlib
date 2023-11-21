@@ -8,7 +8,7 @@ from skimage.segmentation import felzenszwalb, slic, quickshift, watershed
 from skimage.segmentation import mark_boundaries
 from skimage.util import img_as_float
 
-class Segmenter:
+class Superpixels:
     def __init__(self, method, **kwargs):
         self.method = method
         self.kwargs = kwargs
