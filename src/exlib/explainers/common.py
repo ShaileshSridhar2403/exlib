@@ -90,3 +90,16 @@ def np_to_torch_img(x_np):
         return x.permute(2,0,1)
     else: 
         raise ValueError("Image array doesn't have 3 or 4 dimensions")
+
+def convert_idx_masks_to_bool(masks):
+    """
+    input: masks (1, img_dim1, img_dim2)
+    output: masks_bool (num_masks, img_dim1, img_dim2)
+    """
+    unique_idxs = torch.sort(torch.unique(masks)).values
+    idxs = unique_idxs.view(-1, 1, 1)
+    broadcasted_masks = masks.expand(unique_idxs.shape[0], 
+                                     masks.shape[1], 
+                                     masks.shape[2])
+    masks_bool = (broadcasted_masks == idxs)
+    return masks_bool

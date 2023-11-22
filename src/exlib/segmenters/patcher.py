@@ -2,6 +2,8 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
+from .common import *
+
 
 class PatchSegmenter(nn.Module):
     def __init__(self, sz=(16, 16)):
@@ -17,4 +19,4 @@ class PatchSegmenter(nn.Module):
             idx = torch.arange(self.sz[0]*self.sz[1]).view(1,1,*self.sz).float()
             segments = F.interpolate(idx, size=x.size()[-2:], mode='nearest').long()
             segments_all[i] = segments[0]
-        return segments_all
+        return SegmenterOutput(segments_all, {})

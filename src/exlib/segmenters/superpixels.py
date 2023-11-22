@@ -9,6 +9,8 @@ from skimage.segmentation import felzenszwalb, slic, quickshift, watershed
 from skimage.segmentation import mark_boundaries
 from skimage.util import img_as_float
 
+from .common import *
+
 class Superpixels(nn.Module):
     def __init__(self, method, **kwargs):
         super().__init__()
@@ -42,7 +44,7 @@ class Superpixels(nn.Module):
         segments = torch.zeros(bsz, 1, *x.shape[-2:], dtype=int)
         for i in range(bsz):
             segments[i] = torch.from_numpy(self._segment(x[i].cpu().permute(1,2,0).numpy())).to(device)
-        return segments
+        return SegmenterOutput(segments, {})
 
     def _segment(self, x):
         if self.method == 'felzenszwalb':
