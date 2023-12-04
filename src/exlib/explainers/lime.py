@@ -34,8 +34,9 @@ def explain_image_cls_with_lime(model, x, ts,
     kernel_width=0.25, kernel=None, verbose=False, feature_selection='auto', random_state=None
 
     # explain_instance args
-    image, classifier_fn, labels=(1, ), hide_color=None, top_labels=5, num_features=100000, num_samples=1000
-    batch_size=10, segmentation_fn=None, distance_metric='cosine', model_regressor=None, random_seed=None, progress_bar=true
+    image, classifier_fn, labels=(1, ), hide_color=None, top_labels=5,
+    num_features=100000, num_samples=1000, batch_size=10, segmentation_fn=None,
+    distance_metric='cosine', model_regressor=None, random_seed=None, progress_bar=true
 
     # get_image_and_mask arguments
     positive_only=true, negative_only=False, hide_rest=False, num_features=5, min_weight=0.0
@@ -58,16 +59,15 @@ def explain_image_cls_with_lime(model, x, ts,
         todo_labels = ts
 
     lime_exp = explainer.explain_instance(x_np, f, labels=todo_labels, **explain_instance_kwargs)
-    masks = []
-    for t in todo_labels:
-        img, mask = lime_exp.get_image_and_mask(t, **get_image_and_mask_kwargs)
-        mask = torch.from_numpy(mask).float()
-        if mask.ndim == 2:
-            mask = mask.view(1,H,W).repeat(3,1,1)
-        masks.append(mask)
 
-    masks = torch.from_numpy(np.stack(masks))
-    return FeatureAttrOutput(masks, lime_exp)
+    attrs = torch.zeros_like(x)
+    for i, ti in enumerate(todo_labels):
+        seg_mask = torch.from_numpy(lime_exp.segments)
+        seg_attrs = lime_exp.local_exp[ti]
+        for seg_id, seg_attr in seg_attrs:
+            attrs += (seg_mask == seg_id) * seg_attr
+
+    return FeatureAttrOutput(attrs, lime_exp)
 
 
 class LimeImageCls(FeatureAttrMethod):
@@ -92,7 +92,7 @@ class LimeImageCls(FeatureAttrMethod):
         N = x.size(0)
         assert x.ndim == 4 and t.ndim == 1 and len(t) == N
 
-        masks, lime_exps = [], []
+        attrs, lime_exps = [], []
         for i in range(N):
             xi, ti = x[i], t[i].cpu().item()
             out = explain_image_cls_with_lime(self.model, xi, [ti],
@@ -100,10 +100,10 @@ class LimeImageCls(FeatureAttrMethod):
                     explain_instance_kwargs=self.explain_instance_kwargs,
                     get_image_and_mask_kwargs=self.get_image_and_mask_kwargs)
 
-            masks.append(out.attributions)
+            attrs.append(out.attributions)
             lime_exps.append(out.explainer_output)
 
-        return FeatureAttrOutput(torch.cat(masks, dim=0), lime_exps)
+        return FeatureAttrOutput(torch.stack(attrs), lime_exps)
 
 
 # Segmentation model
@@ -131,7 +131,7 @@ class LimeImageSeg(FeatureAttrMethod):
         N = x.size(0)
         assert x.ndim == 4 and t.ndim == 1 and len(t) == N
 
-        masks, lime_exps = [], []
+        attrs, lime_exps = [], []
         for i in range(N):
             xi, ti = x[i], t[i].cpu().item()
             out = explain_image_cls_with_lime(self.cls_model, xi, [ti],
@@ -139,9 +139,9 @@ class LimeImageSeg(FeatureAttrMethod):
                     explain_instance_kwargs=self.explain_instance_kwargs,
                     get_image_and_mask_kwargs=self.get_image_and_mask_kwargs)
 
-            masks.append(out.attributions)
+            attrs.append(out.attributions)
             lime_exps.append(out.explainer_output)
 
-        return FeatureAttrOutput(torch.cat(masks, dim=0), lime_exps)
+        return FeatureAttrOutput(torch.stack(attrs), lime_exps)
 
 
