@@ -457,7 +457,7 @@ class SOP(nn.Module):
     def __init__(self, 
                  config,
                  backbone_model,
-                 class_weights=None
+                 class_weights=None,
                  ):
         super().__init__()
         self.config = config
@@ -477,7 +477,7 @@ class SOP(nn.Module):
             except:
                 raise ValueError('class_weights is None and cannot be inferred from backbone_model')
         try:
-            self.class_weights = copy.deepcopy(class_weights)
+            self.class_weights = copy.deepcopy(class_weights)  # maybe can do this outside
             print('deep copy class weights')
         except:
             self.class_weights = class_weights.clone()
@@ -769,6 +769,220 @@ class SOPImageSeg(SOPImage):
         
         flat_masks = compress_masks_image(input_mask_weights, output_mask_weights)
 
+        return AttributionOutputSOP(weighted_logits,
+                                    logits,
+                                    pooler_outputs,
+                                    input_mask_weights,
+                                    output_mask_weights,
+                                    masks_aggr_pred_cls,
+                                    masks_max_pred_cls,
+                                    masks_aggr,
+                                    flat_masks)
+
+
+class SOPText(SOP):
+    def __init__(self, 
+                 config,
+                 blackbox_model,
+                 class_weights=None,
+                 projection_layer=None,
+                 ):
+        super().__init__(config,
+                            blackbox_model,
+                            class_weights
+                            )
+
+        if projection_layer is not None:
+            self.projection = copy.deepcopy(projection_layer)
+        else:
+            self.init_projection()
+
+        # Initialize the weights of the model
+        self.init_grads()
+
+    def init_projection(self):
+        self.projection = nn.Linear(1, self.hidden_size)
+
+    def forward(self, 
+                inputs, 
+                segs=None, 
+                input_mask_weights=None,
+                epoch=-1, 
+                mask_batch_size=16,
+                label=None,
+                return_tuple=False,
+                kwargs={}):
+        if epoch == -1:
+            epoch = self.num_heads
+        bsz, seq_len = inputs.shape
+        
+        # Mask (Group) generation
+        if input_mask_weights is None:
+            grouped_inputs_embeds, input_mask_weights, grouped_kwargs = self.group_generate(inputs, epoch, mask_batch_size, 
+                                                                                            segs, kwargs)
+            grouped_inputs = None
+        else:
+            grouped_inputs = inputs.unsqueeze(1) * input_mask_weights.unsqueeze(2) # directly apply mask
+        
+        # Backbone model
+        logits, pooler_outputs = self.run_backbone(grouped_inputs, mask_batch_size, kwargs=grouped_kwargs)
+
+        # Mask (Group) selection & aggregation
+        weighted_logits, output_mask_weights, logits, pooler_outputs = self.group_select(logits, pooler_outputs, seq_len)
+
+        if return_tuple:
+            return self.get_results_tuple(weighted_logits, logits, pooler_outputs, input_mask_weights, output_mask_weights, bsz, label)
+        else:
+            return weighted_logits
+
+    def get_results_tuple(self, weighted_logits, logits, pooler_outputs, input_mask_weights, output_mask_weights, bsz, label):
+        raise NotImplementedError
+
+    def run_backbone(self, masked_inputs=None, mask_batch_size=16, kwargs={}):  # TODO: Fix so that we don't need to know the input
+        if masked_inputs is not None:
+            bsz, num_masks, seq_len = masked_inputs.shape
+            masked_inputs = masked_inputs.reshape(-1, seq_len)
+            kwargs_flat = {k: v.reshape(-1, seq_len) for k, v in kwargs.items()}
+        else:
+            bsz, num_masks, seq_len, hidden_size = kwargs['inputs_embeds'].shape
+            
+            kwargs_flat = {k: v.reshape(-1, seq_len, hidden_size) if k == 'inputs_embeds' else v.reshape(-1, seq_len)
+                           for k, v in kwargs.items()}
+        logits = []
+        pooler_outputs = []
+        for i in range(0, bsz * num_masks, mask_batch_size):
+            kwargs_i = {k: v[i:i+mask_batch_size] for k, v in kwargs_flat.items()}
+            output_i = self.blackbox_model(
+                masked_inputs[i:i+mask_batch_size] if masked_inputs is not None else None,
+                **kwargs_i
+            )
+            pooler_i = output_i.pooler_output
+            logits_i = output_i.logits
+            logits.append(logits_i)
+            pooler_outputs.append(pooler_i)
+
+        logits = torch.cat(logits).view(bsz, num_masks, self.num_classes, -1)
+        pooler_outputs = torch.cat(pooler_outputs).view(bsz, num_masks, self.hidden_size, -1)
+        return logits, pooler_outputs
+    
+    def group_generate(self, inputs, epoch, mask_batch_size=16, segs=None, kwargs={}):
+        bsz, seq_len = inputs.shape
+        mask_embed = self.projection(torch.tensor([0]).int().to(inputs.device))
+        projected_inputs = self.projection(inputs)
+        
+        if segs is None:   # word level
+            projected_inputs = projected_inputs * self.projected_input_scale
+
+            if self.num_masks_max != -1:
+                input_dropout_idxs = torch.randperm(projected_inputs.shape[1])
+                if 'attention_mask' in kwargs:
+                    attention_mask_mult = kwargs['attention_mask'] * input_dropout_idxs
+                else:
+                    attention_mask_mult = input_dropout_idxs
+                input_dropout_idxs = torch.argsort(attention_mask_mult, dim=-1).flip(-1)[:, :self.num_masks_max]
+                batch_indices = torch.arange(bsz).unsqueeze(1).repeat(1, input_dropout_idxs.shape[-1])
+                selected_projected_inputs = projected_inputs[batch_indices, input_dropout_idxs]
+                projected_query = selected_projected_inputs
+            else:
+                projected_query = projected_inputs
+            input_mask_weights_cand = self.input_attn(projected_query, projected_inputs, epoch=epoch)
+            input_mask_weights_cand = input_mask_weights_cand.squeeze(1)
+
+            input_mask_weights_cand = torch.clip(input_mask_weights_cand, max=1.0)
+        else: # sentence level
+            # With/without masks are a bit different. Should we make them the same? Need to experiment.
+            bsz, num_segs, seq_len = segs.shape
+
+            seged_inputs_embeds = projected_inputs.unsqueeze(1) * segs.unsqueeze(-1) + \
+                               mask_embed.view(1,1,1,-1) * (1 - segs.unsqueeze(-1))
+            
+            seged_kwargs = {}
+            for k, v in kwargs.items():
+                seged_kwargs[k] = v.unsqueeze(1).expand(segs.shape).reshape(-1, seq_len)
+            seged_kwargs['inputs_embeds'] = seged_inputs_embeds
+
+            # TODO: always have seg for the part after sep token
+            _, interm_outputs = self.run_backbone(None, mask_batch_size, kwargs=seged_kwargs)
+            
+            interm_outputs = interm_outputs.view(bsz, -1, self.hidden_size)
+            interm_outputs = interm_outputs * self.projected_input_scale
+            segment_mask_weights = self.input_attn(interm_outputs, interm_outputs, epoch=epoch)
+            segment_mask_weights = segment_mask_weights.reshape(bsz, -1, num_segs)
+            
+            new_masks =  segs.unsqueeze(1) * segment_mask_weights.unsqueeze(-1)
+            # (bsz, num_new_masks, num_masks, seq_len)
+            input_mask_weights_cand = new_masks.sum(2)  # if one mask has it, then have it
+            # todo: Can we simplify the above to be dot product?
+            
+        scale_factor = 1.0 / input_mask_weights_cand.max(dim=-1).values
+        input_mask_weights_cand = input_mask_weights_cand * scale_factor.view(bsz, -1,1)
+
+        # we are using iterative training
+        # we will train some masks every epoch
+        # the masks to train are selected by mod of epoch number
+        # Dropout for training
+        if self.training:
+            dropout_idxs = torch.randperm(input_mask_weights_cand.shape[1])[:self.num_masks_sample]
+            dropout_mask = torch.zeros(bsz, input_mask_weights_cand.shape[1]).to(inputs.device)
+            dropout_mask[:,dropout_idxs] = 1
+        else:
+            dropout_mask = torch.ones(bsz, input_mask_weights_cand.shape[1]).to(inputs.device)
+        
+        input_mask_weights = input_mask_weights_cand[dropout_mask.bool()].clone()
+        input_mask_weights = input_mask_weights.reshape(bsz, -1, seq_len)
+        
+        # Always add the second part of the sequence (in question answering, it would be the qa pair)
+        input_mask_weights = input_mask_weights  + kwargs['token_type_ids'].unsqueeze(1)
+        
+        masked_inputs_embeds = projected_inputs.unsqueeze(1) * input_mask_weights.unsqueeze(-1) + \
+                               mask_embed.view(1,1,1,-1) * (1 - input_mask_weights.unsqueeze(-1))
+        
+        masked_kwargs = {}
+        for k, v in kwargs.items():
+            masked_kwargs[k] = v.unsqueeze(1).expand(input_mask_weights.shape).reshape(-1, seq_len)
+        masked_kwargs['inputs_embeds'] = masked_inputs_embeds
+        
+        return masked_inputs_embeds, input_mask_weights, masked_kwargs
+    
+    def group_select(self, logits, pooler_outputs, seq_len):
+        raise NotImplementedError
+
+
+class SOPTextCls(SOPText):
+    def group_select(self, logits, pooler_outputs, seq_len):
+        bsz, num_masks = logits.shape[:2]
+
+        logits = logits.view(bsz, num_masks, self.num_classes)
+        pooler_outputs = pooler_outputs.view(bsz, num_masks, self.hidden_size)
+
+        query = self.class_weights.unsqueeze(0).expand(bsz, 
+                                                    self.num_classes, 
+                                                    self.hidden_size) #.to(logits.device)
+        
+        key = pooler_outputs
+        weighted_logits, output_mask_weights = self.output_attn(query, key, logits)
+
+        return weighted_logits, output_mask_weights, logits, pooler_outputs
+    
+    def get_results_tuple(self, weighted_logits, logits, pooler_outputs, input_mask_weights, output_mask_weights, bsz, label):
+        # todo: debug for segmentation
+        masks_aggr = None
+        masks_aggr_pred_cls = None
+        masks_max_pred_cls = None
+        flat_masks = None
+
+        if label is not None:
+            predicted = label  # allow labels to be different
+        else:
+            _, predicted = torch.max(weighted_logits.data, -1)
+        # import pdb; pdb.set_trace()
+        masks_mult = input_mask_weights.unsqueeze(2) * output_mask_weights.unsqueeze(-1) # bsz, n_masks, n_cls
+        
+        masks_aggr = masks_mult.sum(1) # bsz, n_cls
+        masks_aggr_pred_cls = masks_aggr[range(bsz), predicted].unsqueeze(1)
+        max_mask_indices = output_mask_weights.max(2).values.max(1).indices
+        masks_max_pred_cls = masks_mult[range(bsz),max_mask_indices,predicted].unsqueeze(1)
+        flat_masks = compress_masks_text(input_mask_weights, output_mask_weights)
         return AttributionOutputSOP(weighted_logits,
                                     logits,
                                     pooler_outputs,

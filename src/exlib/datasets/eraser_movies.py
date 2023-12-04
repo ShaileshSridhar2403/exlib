@@ -33,7 +33,8 @@ class EraserMovies(Dataset):
             url = 'https://www.eraserbenchmark.com/zipped/movies.tar.gz'
             response = requests.get(url)
 
-            tar_gz_path = os.path.join(data_dir, 'movies.tar.gz')
+            # tar_gz_path = os.path.join(data_dir, 'movies.tar.gz')
+            tar_gz_path = data_dir
             with open(tar_gz_path, 'wb') as f:
                 f.write(response.content)
 
@@ -44,7 +45,8 @@ class EraserMovies(Dataset):
             with tarfile.open(tar_gz_path, 'r:gz') as file:
                 file.extractall(path=movies_folder)
 
-        self.movies_folder = os.path.join(data_dir, 'movies')
+        # self.movies_folder = os.path.join(data_dir, 'movies')
+        self.movies_folder = data_dir
         self.docs_folder = os.path.join(self.movies_folder, 'docs')
 
         # X = []

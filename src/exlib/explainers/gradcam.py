@@ -3,7 +3,7 @@
 import torch
 from tqdm import tqdm
 from pytorch_grad_cam import GradCAM, HiResCAM, ScoreCAM, GradCAMPlusPlus, AblationCAM, XGradCAM, EigenCAM, FullGrad
-from .common import TorchAttribution, AttributionOutput
+from .common import *
 from copy import deepcopy
 
 
@@ -16,29 +16,24 @@ class WrappedModel(torch.nn.Module):
             param.requires_grad = True
             
     def forward(self, x):
-        # return self.model(x)[0]
-        # return self.postprocess(self.model(x))
         try:
             outputs = self.model(x, output_hidden_states=True)
         except:
             outputs = self.model(x)
-        # return self.postprocess(outputs) #.hidden_states[-1]
         return outputs.logits
 
 
-class TorchImageGradCAM(TorchAttribution):
-    def __init__(self, model, target_layers, postprocess=None):
+class GradCAMImageCls(FeatureAttrMethod):
+    def __init__(self, model, target_layers, postprocess=None, reshape_transform=None):
         
         model = WrappedModel(model, postprocess)
 
         super().__init__(model, postprocess)
         
-        # self.target_layer = target_layer
-        model.train()
-        # self.target_layers = [model.model.vit.encoder.layer[11].layernorm_after]
         self.target_layers = target_layers
         with torch.enable_grad():
             self.grad_cam = GradCAM(model=model, target_layers=self.target_layers,
+                                    reshape_transform=reshape_transform,
                                     use_cuda=True if torch.cuda.is_available() else False)
 
     def forward(self, X, label=None):
@@ -46,4 +41,4 @@ class TorchImageGradCAM(TorchAttribution):
             grad_cam_result = self.grad_cam(input_tensor=X, targets=label)
             grad_cam_result = torch.tensor(grad_cam_result)
 
-        return AttributionOutput(grad_cam_result.unsqueeze(1), grad_cam_result)
+        return FeatureAttrOutput(grad_cam_result.unsqueeze(1), grad_cam_result)
