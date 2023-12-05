@@ -11,11 +11,11 @@ from tqdm import tqdm
 from .common import FeatureAttrMethod, FeatureAttrOutput
 
 
-class TorchImageRISE(FeatureAttrMethod):
+class RiseImageCls(FeatureAttrMethod):
     def __init__(self, model, input_size, postprocess=None, \
                  gpu_batch=100, N=2000, \
                  s=8, p1=0.5, seed=42):
-        super(TorchImageRISE, self).__init__(model, postprocess)
+        super(RiseImageCls, self).__init__(model, postprocess)
         self.input_size = input_size
         self.gpu_batch = gpu_batch
         self.generate_masks(N, s, p1)
@@ -78,11 +78,11 @@ class TorchImageRISE(FeatureAttrMethod):
         return FeatureAttrOutput(sal[range(B), label], sal)
 
 
-class TorchTextRISE(FeatureAttrMethod):
+class RiseTextCls(FeatureAttrMethod):
     def __init__(self, model, input_size, postprocess=None, \
                  gpu_batch=100, N=500, \
                  s=8, p1=0.5, seed=42, mask_combine=None):
-        super(TorchTextRISE, self).__init__(model, postprocess)
+        super(RiseTextCls, self).__init__(model, postprocess)
         self.input_size = input_size  # only one number for text
         self.gpu_batch = gpu_batch
         self.generate_masks(N, s, p1)

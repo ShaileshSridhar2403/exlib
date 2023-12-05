@@ -26,7 +26,8 @@ AttributionOutputSOP = namedtuple("AttributionOutputSOP",
                                    "attributions", 
                                    "attributions_max",
                                    "attributions_all",
-                                   "flat_masks"])
+                                   "flat_masks",
+                                   "grouped_attributions"])
 
 
 def convert_idx_masks_to_bool(masks):
@@ -716,6 +717,7 @@ class SOPImageCls(SOPImage):
         max_mask_indices = output_mask_weights.max(2).values.max(1).indices
         masks_max_pred_cls = masks_mult[range(bsz),max_mask_indices,predicted].unsqueeze(1)
         flat_masks = compress_masks_image(input_mask_weights, output_mask_weights)
+        grouped_attributions = output_mask_weights * logits
         return AttributionOutputSOP(weighted_logits,
                                     logits,
                                     pooler_outputs,
@@ -724,7 +726,8 @@ class SOPImageCls(SOPImage):
                                     masks_aggr_pred_cls,
                                     masks_max_pred_cls,
                                     masks_aggr,
-                                    flat_masks)
+                                    flat_masks,
+                                    grouped_attributions)
     
 
 class SOPImageSeg(SOPImage):
@@ -766,6 +769,7 @@ class SOPImageSeg(SOPImage):
         # TODO: this has some problems ^
         # import pdb
         # pdb.set_trace()
+        grouped_attributions = output_mask_weights * logits
         
         flat_masks = compress_masks_image(input_mask_weights, output_mask_weights)
 
@@ -777,7 +781,8 @@ class SOPImageSeg(SOPImage):
                                     masks_aggr_pred_cls,
                                     masks_max_pred_cls,
                                     masks_aggr,
-                                    flat_masks)
+                                    flat_masks,
+                                    grouped_attributions)
 
 
 class SOPText(SOP):
@@ -983,6 +988,7 @@ class SOPTextCls(SOPText):
         max_mask_indices = output_mask_weights.max(2).values.max(1).indices
         masks_max_pred_cls = masks_mult[range(bsz),max_mask_indices,predicted].unsqueeze(1)
         flat_masks = compress_masks_text(input_mask_weights, output_mask_weights)
+        grouped_attributions = output_mask_weights * logits
         return AttributionOutputSOP(weighted_logits,
                                     logits,
                                     pooler_outputs,
@@ -991,4 +997,5 @@ class SOPTextCls(SOPText):
                                     masks_aggr_pred_cls,
                                     masks_max_pred_cls,
                                     masks_aggr,
-                                    flat_masks)
+                                    flat_masks,
+                                    grouped_attributions)

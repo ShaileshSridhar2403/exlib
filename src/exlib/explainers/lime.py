@@ -60,13 +60,14 @@ def explain_image_cls_with_lime(model, x, ts,
     lime_exp = explainer.explain_instance(x_np, f, labels=todo_labels, **explain_instance_kwargs)
     masks = []
     for t in todo_labels:
-        img, mask = lime_exp.get_image_and_mask(t, **get_image_and_mask_kwargs)
-        mask = torch.from_numpy(mask).float()
+        mask = torch.zeros(H, W).float().to(x.device)
+        for e_i, (k, v) in enumerate(sorted(lime_exp.local_exp[t], key=lambda item: item[1], reverse=True)):
+            mask[lime_exp.segments==k] = v
         if mask.ndim == 2:
             mask = mask.view(1,H,W).repeat(3,1,1)
         masks.append(mask)
 
-    masks = torch.from_numpy(np.stack(masks))
+    masks = torch.stack(masks)
     return FeatureAttrOutput(masks, lime_exp)
 
 
