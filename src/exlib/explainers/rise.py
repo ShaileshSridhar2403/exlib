@@ -12,10 +12,10 @@ from .common import FeatureAttrMethod, FeatureAttrOutput
 
 
 class RiseImageCls(FeatureAttrMethod):
-    def __init__(self, model, input_size, postprocess=None, \
+    def __init__(self, model, input_size=(224, 224), \
                  gpu_batch=100, N=2000, \
                  s=8, p1=0.5, seed=42):
-        super(RiseImageCls, self).__init__(model, postprocess)
+        super(RiseImageCls, self).__init__(model)
         self.input_size = input_size
         self.gpu_batch = gpu_batch
         self.generate_masks(N, s, p1)
@@ -60,29 +60,25 @@ class RiseImageCls(FeatureAttrMethod):
             p = []
             for i in range(0, N*B, self.gpu_batch):
                 pred = self.model(stack[i:min(i + self.gpu_batch, N*B)])
-                if self.postprocess is not None:
-                    pred = self.postprocess(pred)
                 p.append(pred)
             p = torch.cat(p)
             if label is None:
                 # if no label, then explain the top class
                 pred_x = self.model(x)
-                if self.postprocess is not None:
-                    pred_x = self.postprocess(pred_x)
                 label = torch.argmax(pred_x, dim=-1)
             CL = p.size(1)
             p = p.view(N, B, CL)
             sal = torch.matmul(p.permute(1, 2, 0), self.masks.view(N, H * W))
             sal = sal.view(B, CL, H, W)
         
-        return FeatureAttrOutput(sal[range(B), label], sal)
+        return FeatureAttrOutput(sal[range(B), label].unsqueeze(1), sal)
 
 
 class RiseTextCls(FeatureAttrMethod):
-    def __init__(self, model, input_size, postprocess=None, \
+    def __init__(self, model, input_size, \
                  gpu_batch=100, N=500, \
                  s=8, p1=0.5, seed=42, mask_combine=None):
-        super(RiseTextCls, self).__init__(model, postprocess)
+        super(RiseTextCls, self).__init__(model)
         self.input_size = input_size  # only one number for text
         self.gpu_batch = gpu_batch
         self.generate_masks(N, s, p1)
@@ -138,15 +134,11 @@ class RiseTextCls(FeatureAttrMethod):
                     pred = self.model(inputs_embeds=stack[i:min(i + self.gpu_batch, N*B)], **kwargs_curr)
                 else:
                     pred = self.model(stack[i:min(i + self.gpu_batch, N*B)], **kwargs_curr)
-                if self.postprocess is not None:
-                    pred = self.postprocess(pred)
                 p.append(pred)
             p = torch.cat(p)
             if label is None:
                 # if no label, then explain the top class
                 pred_x = self.model(x, **kwargs)
-                if self.postprocess is not None:
-                    pred_x = self.postprocess(pred_x)
                 label = torch.argmax(pred_x, dim=-1)
             CL = p.size(1)
             p = p.view(N, B, CL)

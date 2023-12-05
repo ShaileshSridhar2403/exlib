@@ -16,3 +16,6 @@ dependencies:
   - lime=0.2.0.1
   - matplotlib=3.8.2
   - sckit-image
+  - pip
+  - pip:
+    - git+https://github.com/fallcat/pytorch-grad-cam.git

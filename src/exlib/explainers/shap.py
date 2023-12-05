@@ -23,6 +23,8 @@ def explain_image_cls_with_shap(model, x, t, mask_value, shap_explainer_kwargs):
     shap_outs = []
     shap_values = []
     for xi, ti in zip(x_np, t):
+        if isinstance(ti, torch.Tensor):
+            ti = ti.cpu().item()
         out = explainer(np.expand_dims(xi, axis=0), outputs=[ti])
         svs = torch.from_numpy(out.values) # (1,H,W,C,1)
         shap_outs.append(out)
