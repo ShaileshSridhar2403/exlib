@@ -60,9 +60,9 @@ def explain_image_cls_with_lime(model, x, ts,
 
     lime_exp = explainer.explain_instance(x_np, f, labels=todo_labels, **explain_instance_kwargs)
 
-    attrs = torch.zeros_like(x)
+    attrs = torch.zeros_like(x).to(x.device)
     for i, ti in enumerate(todo_labels):
-        seg_mask = torch.from_numpy(lime_exp.segments)
+        seg_mask = torch.from_numpy(lime_exp.segments).to(x.device)
         seg_attrs = lime_exp.local_exp[ti]
         for seg_id, seg_attr in seg_attrs:
             attrs += (seg_mask == seg_id) * seg_attr
