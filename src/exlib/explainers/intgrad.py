@@ -100,7 +100,8 @@ class IntGradImageCls(FeatureAttrMethod):
         if not isinstance(t, torch.Tensor):
             t = torch.tensor(t)
 
-        return explain_cls_with_intgrad(self.model, x, t, **kwargs)
+        with torch.enable_grad():
+            return explain_cls_with_intgrad(self.model, x, t, **kwargs)
 
 
 
@@ -117,5 +118,6 @@ class IntGradImageSeg(FeatureAttrMethod):
         if not isinstance(t, torch.Tensor):
             t = torch.tensor(t)
 
-        return explain_cls_with_intgrad(self.cls_model, x, t, **kwargs)
+        with torch.enable_grad():
+            return explain_cls_with_intgrad(self.cls_model, x, t, **kwargs)
 

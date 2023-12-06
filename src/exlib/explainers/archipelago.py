@@ -106,5 +106,5 @@ class ArchipelagoImageCls(FeatureAttrMethod):
         return FeatureAttrOutput(expln_scores, {
             "expln_flat_masks": expln_flat_masks,
             "masks": masks_all,
-            "mask_weights": mask_weights_all
+            "mask_weights": mask_weights_all,
         })
