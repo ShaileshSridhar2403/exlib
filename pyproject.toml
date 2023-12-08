@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "exlib"
 version = "0.0.1"
@@ -16,7 +20,7 @@ dependencies = [
   'segmentation-models-pytorch >= 0.3.3',
   'scikit-image >= 0.22'
 ]
-description = "Tools for explainability"
+description = "Toolkit for explainability by BrachioLab"
 readme = "README.md"
 requires-python = ">=3.7"
 classifiers = [
