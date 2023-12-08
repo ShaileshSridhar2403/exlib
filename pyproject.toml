@@ -30,7 +30,6 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = [
-  "grad-cam@git+https://github.com/fallcat/pytorch-grad-cam", 
   'notebook'
 ]
 
