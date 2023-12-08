@@ -11,7 +11,6 @@ authors = [
 dependencies = [
   'lime >= 0.2',
   'shap >= 0.42',
-  "grad-cam@git+https://github.com/fallcat/pytorch-grad-cam", 
   'torch >= 2.0',
   'torchvision >= 0.15', 
   'torchaudio >= 2.0',
@@ -31,6 +30,7 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = [
+  "grad-cam@git+https://github.com/fallcat/pytorch-grad-cam", 
   'notebook'
 ]
 
