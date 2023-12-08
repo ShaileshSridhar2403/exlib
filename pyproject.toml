@@ -7,9 +7,14 @@ authors = [
 dependencies = [
   'lime >= 0.2',
   'shap >= 0.42',
+  "grad-cam@git+https://github.com/fallcat/pytorch-grad-cam", 
   'torch >= 2.0',
+  'torchvision >= 0.15', 
+  'torchaudio >= 2.0',
   'grad-cam >= 1.4.8',
-  'jsonlines >= 3.1.0'
+  'jsonlines >= 3.1.0', 
+  'segmentation-models-pytorch >= 0.3.3',
+  'scikit-image >= 0.22'
 ]
 description = "Tools for explainability"
 readme = "README.md"
@@ -18,6 +23,11 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+dev = [
+  'notebook'
 ]
 
 [project.urls]
