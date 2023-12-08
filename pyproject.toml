@@ -31,5 +31,5 @@ dev = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/DebugML/exlib"
-"Bug Tracker" = "https://github.com/DebugML/exlib/issues"
+"Homepage" = "https://github.com/BrachioLab/exlib"
+"Bug Tracker" = "https://github.com/BrachioLab/exlib/issues"
