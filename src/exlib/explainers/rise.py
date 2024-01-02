@@ -75,14 +75,16 @@ class RiseImageCls(FeatureAttrMethod):
 
 
 class RiseTextCls(FeatureAttrMethod):
-    def __init__(self, model, input_size, \
+    def __init__(self, model, input_size=512, \
                  gpu_batch=100, N=500, \
-                 s=8, p1=0.5, seed=42, mask_combine=None):
+                 s=8, p1=0.5, seed=42, mask_combine=None,
+                normalize=False):
         super(RiseTextCls, self).__init__(model)
         self.input_size = input_size  # only one number for text
         self.gpu_batch = gpu_batch
         self.generate_masks(N, s, p1)
         self.mask_combine = mask_combine
+        self.normalize = normalize
 
     def generate_masks(self, N, s, p1, savepath='masks.npy'):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -119,6 +121,7 @@ class RiseTextCls(FeatureAttrMethod):
                 stack = stack.reshape(N * B, L, -1)
             else:
                 stack = torch.mul(self.masks.view(N, 1, L), x.data.view(B, L))
+                import pdb; pdb.set_trace()
                 stack = stack.reshape(N * B, L)
             kwargs_new = {}
             for k, v in kwargs.items():
@@ -143,6 +146,8 @@ class RiseTextCls(FeatureAttrMethod):
             CL = p.size(1)
             p = p.view(N, B, CL)
             sal = torch.matmul(p.permute(1, 2, 0), self.masks.view(N, L))
+            if self.normalize:
+                sal = sal / L
             sal = sal.view(B, CL, L)
         
         return FeatureAttrOutput(sal[range(B), label], sal)
