@@ -111,7 +111,12 @@ def compress_single_masks(masks, masks_weights, min_size):
     sorted_weights, sorted_indices = torch.sort(masks_weights, descending=True)
     sorted_indices = sorted_indices[sorted_weights > 0]
 
-    masks_bool = masks_bool[sorted_indices]  # sorted masks
+    
+    try:
+        masks_bool = masks_bool[sorted_indices]  # sorted masks
+    except:
+        import pdb; pdb.set_trace()
+        masks_bool = masks_bool[sorted_indices]  # sorted masks
     
     masks = torch.zeros(*masks_bool.shape[1:]).to(masks.device)
     count = 1
@@ -709,15 +714,16 @@ class SOPImageCls(SOPImage):
         else:
             _, predicted = torch.max(weighted_logits.data, -1)
         
-        masks_mult = input_mask_weights.unsqueeze(2) * \
-        output_mask_weights.unsqueeze(-1).unsqueeze(-1) # bsz, n_masks, n_cls, img_dim, img_dim
+        grouped_attributions = output_mask_weights * logits # instead of just output_mask_weights
         
-        masks_aggr = masks_mult.sum(1) # bsz, n_cls, img_dim, img_dim OR bsz, n_cls, seq_len
-        masks_aggr_pred_cls = masks_aggr[range(bsz), predicted].unsqueeze(1)
-        max_mask_indices = output_mask_weights.max(2).values.max(1).indices
-        masks_max_pred_cls = masks_mult[range(bsz),max_mask_indices,predicted].unsqueeze(1)
-        flat_masks = compress_masks_image(input_mask_weights, output_mask_weights)
-        grouped_attributions = output_mask_weights * logits
+        masks_mult_pred = input_mask_weights * grouped_attributions[:,:,predicted,None]
+        masks_aggr_pred_cls = masks_mult_pred.sum(1)[:,None,:,:]
+        max_mask_indices = grouped_attributions.max(2).values.max(1).indices
+        # import pdb; pdb.set_trace()
+        masks_max_pred_cls = masks_mult_pred[range(bsz),max_mask_indices]
+
+        flat_masks = compress_masks_image(input_mask_weights, grouped_attributions[:,:,predicted])
+        
         return AttributionOutputSOP(weighted_logits,
                                     logits,
                                     pooler_outputs,
@@ -758,7 +764,7 @@ class SOPImageSeg(SOPImage):
 
         # import pdb
         # pdb.set_trace()
-        # _, predicted = torch.max(weighted_output.data, -1)
+        _, predicted = torch.max(weighted_logits.data, -1)
         masks_mult = input_mask_weights.unsqueeze(2) * output_mask_weights.unsqueeze(-1).unsqueeze(-1) # bsz, n_masks, n_cls, img_dim, img_dim
         masks_aggr = masks_mult.sum(1) # bsz, n_cls, img_dim, img_dim OR bsz, n_cls, seq_len
         # masks_aggr_pred_cls = masks_aggr
@@ -771,7 +777,7 @@ class SOPImageSeg(SOPImage):
         # pdb.set_trace()
         grouped_attributions = output_mask_weights * logits
         
-        flat_masks = compress_masks_image(input_mask_weights, output_mask_weights)
+        flat_masks = compress_masks_image(input_mask_weights, output_mask_weights[:,:,predicted])
 
         return AttributionOutputSOP(weighted_logits,
                                     logits,
@@ -879,7 +885,7 @@ class SOPText(SOP):
             projected_inputs = projected_inputs * self.projected_input_scale
 
             if self.num_masks_max != -1:
-                input_dropout_idxs = torch.randperm(projected_inputs.shape[1])
+                input_dropout_idxs = torch.randperm(projected_inputs.shape[1]).to(inputs.device)
                 if 'attention_mask' in kwargs:
                     attention_mask_mult = kwargs['attention_mask'] * input_dropout_idxs
                 else:
@@ -981,13 +987,19 @@ class SOPTextCls(SOPText):
         else:
             _, predicted = torch.max(weighted_logits.data, -1)
         # import pdb; pdb.set_trace()
-        masks_mult = input_mask_weights.unsqueeze(2) * output_mask_weights.unsqueeze(-1) # bsz, n_masks, n_cls
+        # masks_mult = input_mask_weights.unsqueeze(2) * output_mask_weights.unsqueeze(-1) # bsz, n_masks, n_cls
         
-        masks_aggr = masks_mult.sum(1) # bsz, n_cls
-        masks_aggr_pred_cls = masks_aggr[range(bsz), predicted].unsqueeze(1)
+        # masks_aggr = masks_mult.sum(1) # bsz, n_cls
+        # masks_aggr_pred_cls = masks_aggr[range(bsz), predicted].unsqueeze(1)
+        # max_mask_indices = output_mask_weights.max(2).values.max(1).indices
+        # masks_max_pred_cls = masks_mult[range(bsz),max_mask_indices,predicted].unsqueeze(1)
+
+        masks_mult_pred = input_mask_weights * output_mask_weights[:,:,predicted]
+        masks_aggr_pred_cls = masks_mult_pred.sum(1)
         max_mask_indices = output_mask_weights.max(2).values.max(1).indices
-        masks_max_pred_cls = masks_mult[range(bsz),max_mask_indices,predicted].unsqueeze(1)
-        flat_masks = compress_masks_text(input_mask_weights, output_mask_weights)
+        masks_max_pred_cls = masks_mult_pred[range(bsz),max_mask_indices]
+
+        flat_masks = compress_masks_text(input_mask_weights, output_mask_weights[:,:,predicted])
         grouped_attributions = output_mask_weights * logits
         return AttributionOutputSOP(weighted_logits,
                                     logits,
