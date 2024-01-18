@@ -24,13 +24,16 @@ def objective_function(args, explanation, always_keep_idx, task_model, orig_pred
     returns the suff/comp of task_model computed on document using attention_mask=mask, as well as the weight of evidence version of the objective
     ''' 
     # split input into batches if too many parallel runs (i.e. parallel states = parallel data points) to fit into memory
-    num_batches = max(1, math.ceil(args.num_restarts / args.batch_size)) # num_restarts is num parallel runs
+    # import pdb; pdb.set_trace()
+    # batch_size = min(args.batch_size, len(explanation))
+    num_explanations = len(explanation)
+    num_batches = max(1, math.ceil(min(args.num_restarts, num_explanations) / args.batch_size)) # num_restarts is num parallel runs
     num_tokens = orig_input_kwargs['input_ids'].size(-1)
     explanations = np.array_split(explanation, indices_or_sections=num_batches)
     obj_vals, obj_val_woes = [], []
     # repeat original data point batch_size times
     stacked_kwargs = {
-        k : v.expand([args.batch_size] + list(v.shape)[-1:]).squeeze(-1).clone() for k,v in orig_input_kwargs.items() # clone to reallocate memory / squeeze() for labels special case
+        k : v.expand([num_explanations] + list(v.shape)[-1:]).squeeze(-1).clone() for k,v in orig_input_kwargs.items() # clone to reallocate memory / squeeze() for labels special case
     }
     # get eligible for removal idx
     eligible_for_removal = torch.ones(num_tokens).to(args.device)

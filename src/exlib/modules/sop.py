@@ -44,7 +44,22 @@ def convert_idx_masks_to_bool(masks):
     return masks_bool
 
 
-def get_mask_transform(num_masks_max=200, processor=None):
+def convert_idx_masks_to_bool_big_first(masks):
+    """
+    input: masks (1, img_dim1, img_dim2)
+    output: masks_bool (num_masks, img_dim1, img_dim2)
+    """
+    unique_idxs, counts = torch.unique(masks, return_counts=True)
+    unique_idxs_sorted = unique_idxs[counts.argsort(descending=True)]
+    idxs = unique_idxs_sorted.view(-1, 1, 1)
+    broadcasted_masks = masks.expand(unique_idxs.shape[0], 
+                                     masks.shape[1], 
+                                     masks.shape[2])
+    masks_bool = (broadcasted_masks == idxs)
+    return masks_bool
+
+
+def get_mask_transform(num_masks_max=200, processor=None, big_first=False):
     def mask_transform(mask):
         seg_mask_cut_off = num_masks_max
         # Preprocess the mask using the ViTImageProcessor
@@ -66,7 +81,10 @@ def get_mask_transform(num_masks_max=200, processor=None):
             if mask.dtype != torch.bool:
                 if len(mask.shape) == 2:
                     mask = mask.unsqueeze(0)
-                mask = convert_idx_masks_to_bool(mask)
+                if big_first:
+                    mask = convert_idx_masks_to_bool_big_first(mask)
+                else:
+                    mask = convert_idx_masks_to_bool(mask)
             bsz, mask_dim1, mask_dim2 = mask.shape
             mask = mask.unsqueeze(1).expand(bsz, 
                                             3, 
@@ -715,8 +733,8 @@ class SOPImageCls(SOPImage):
             _, predicted = torch.max(weighted_logits.data, -1)
         
         grouped_attributions = output_mask_weights * logits # instead of just output_mask_weights
-        
-        masks_mult_pred = input_mask_weights * grouped_attributions[:,:,predicted,None]
+        # import pdb; pdb.set_trace()
+        masks_mult_pred = input_mask_weights * grouped_attributions[range(len(predicted)),:,predicted,None,None]
         masks_aggr_pred_cls = masks_mult_pred.sum(1)[:,None,:,:]
         max_mask_indices = grouped_attributions.max(2).values.max(1).indices
         # import pdb; pdb.set_trace()
@@ -761,6 +779,7 @@ class SOPImageSeg(SOPImage):
         masks_aggr_pred_cls = None
         masks_max_pred_cls = None
         flat_masks = None
+        grouped_attributions = None
 
         # import pdb
         # pdb.set_trace()
@@ -775,9 +794,9 @@ class SOPImageSeg(SOPImage):
         # TODO: this has some problems ^
         # import pdb
         # pdb.set_trace()
-        grouped_attributions = output_mask_weights * logits
+        # grouped_attributions = output_mask_weights * logits
         
-        flat_masks = compress_masks_image(input_mask_weights, output_mask_weights[:,:,predicted])
+        # flat_masks = compress_masks_image(input_mask_weights, output_mask_weights[:,:,predicted])
 
         return AttributionOutputSOP(weighted_logits,
                                     logits,

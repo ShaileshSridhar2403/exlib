@@ -85,9 +85,9 @@ def execute_single(string, model, tokenizer, target, path, bert=False):
     dist = sequence_forward_func(input_ids, model, token_type_ids, attention_mask)
     dist = F.softmax(dist, dim=1)
     inferred_class = torch.argmax(dist).item()
-    if inferred_class!=target:
-        print('wrong inference')
-    print(f'class distribution: {dist}')
+    # if inferred_class!=target:
+    #     print('wrong inference')
+    # print(f'class distribution: {dist}')
     # instance of layer intermediate gradients based upon the dummy layer representing the embeddings
     #lig = LayerIntermediateGradients(sequence_forward_func, model.transformer.batch_first)
     if not bert:
@@ -188,10 +188,10 @@ def execute_IDG(trees, model, tokenizer, target, path=None, bert=False):
     # print(sequence_forward_func_loss(input_ids, model, token_type_ids, attention_mask, 0))
     dist = sequence_forward_func(input_ids, model, token_type_ids, attention_mask)
     dist = F.softmax(dist, dim=1)
-    print(f'class distribution: {dist}')
+    # print(f'class distribution: {dist}')
     inferred_class = torch.argmax(dist).item()
-    if inferred_class!=target:
-        print('wrong inference')
+    # if inferred_class!=target:
+    #     print('wrong inference')
     # instance of layer intermediate gradients based upon the dummy layer representing the embeddings
     if not bert:
         lig = LayerIntermediateGradients(sequence_forward_func, model.transformer.batch_first)

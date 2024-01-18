@@ -2,6 +2,8 @@ import torch
 from tqdm import tqdm
 import os
 import nltk
+nltk.download('punkt')
+nltk.download('averaged_perceptron_tagger')
 from nltk import word_tokenize, sent_tokenize
 from .common import *
 import sys
