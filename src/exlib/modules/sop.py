@@ -309,20 +309,116 @@ class Sparsemax(nn.Module):
         self.grad_input = nonzeros * (grad_output - sum.expand_as(grad_output))
 
         return self.grad_input
-    
+
+
+def same_tensor(tensor, *args):
+    ''' Do the input tensors all point to the same underlying data '''
+    for other in args:
+        if not torch.is_tensor(other):
+            return False
+
+        if tensor.device != other.device:
+            return False
+
+        if tensor.dtype != other.dtype:
+            return False
+
+        if tensor.data_ptr() != other.data_ptr():
+            return False
+
+    return True
+
+
+class SparseMultiHeadedAttention(nn.Module):
+    ''' Implement a multi-headed attention module '''
+    def __init__(self, embed_dim, num_heads=1, scale=1):
+        ''' Initialize the attention module '''
+        super(SparseMultiHeadedAttention, self).__init__()
+
+        # ensure valid inputs
+        assert embed_dim % num_heads == 0, \
+            f'num_heads={num_heads} should evenly divide embed_dim={embed_dim}'
+
+        # store off the scale and input params
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.projection_dim = embed_dim // num_heads
+        self.scale = scale
+        # self.scale = self.projection_dim ** -0.5
+
+        # Combine projections for multiple heads into a single linear layer for efficiency
+        self.input_weights = nn.Parameter(torch.Tensor(3 * embed_dim, embed_dim))
+        self.output_projection = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.sparsemax = Sparsemax(dim=-1)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        ''' Reset parameters using xavier initialization '''
+        # Initialize using Xavier
+        gain = nn.init.calculate_gain('linear')
+        nn.init.xavier_uniform_(self.input_weights, gain)
+        nn.init.xavier_uniform_(self.output_projection.weight, gain)
+
+    def project(self, inputs, index=0, chunks=1):
+        ''' Produce a linear projection using the weights '''
+        batch_size = inputs.shape[0]
+        start = index * self.embed_dim
+        end = start + chunks * self.embed_dim
+        projections = F.linear(inputs, self.input_weights[start:end]).chunk(chunks, dim=-1)
+
+        output_projections = []
+        for projection in projections:
+            # transform projection to (BH x T x E)
+            output_projections.append(
+                projection.view(
+                    batch_size,
+                    -1,
+                    self.num_heads,
+                    self.projection_dim
+                ).transpose(2, 1).contiguous().view(
+                    batch_size * self.num_heads,
+                    -1,
+                    self.projection_dim
+                )
+            )
+
+        return output_projections
+
+    def attention(self, queries, keys, values):
+        ''' Scaled dot product attention with optional masks '''
+        logits = self.scale * torch.bmm(queries, keys.transpose(2, 1))
+
+        # attended = torch.bmm(F.softmax(logits, dim=-1), values)
+        attn_weights = self.sparsemax(logits)
+        return attn_weights
+
+    def forward(self, queries, keys, values):
+        ''' Forward pass of the attention '''
+        # pylint:disable=unbalanced-tuple-unpacking
+        if same_tensor(values, keys, queries):
+            values, keys, queries = self.project(values, chunks=3)
+        elif same_tensor(values, keys):
+            values, keys = self.project(values, chunks=2)
+            queries, = self.project(queries, 2)
+        else:
+            values, = self.project(values, 0)
+            keys, = self.project(keys, 1)
+            queries, = self.project(queries, 2)
+
+        attn_weights = self.attention(queries, keys, values)
+        return attn_weights
+
 
 class GroupGenerateLayer(nn.Module):
-    def __init__(self, hidden_dim, num_heads):
+    def __init__(self, hidden_dim, num_heads, scale=1):
         super().__init__()
         
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
+        self.scale = scale
        
-        self.multihead_attns = nn.ModuleList([nn.MultiheadAttention(hidden_dim, 
-                                                                   1, 
-                                                                   batch_first=True) \
+        self.multihead_attns = nn.ModuleList([SparseMultiHeadedAttention(hidden_dim, scale=scale) \
                                                 for _ in range(num_heads)])
-        self.sparsemax = Sparsemax(dim=-1)
 
     def forward(self, query, key_value, epoch=0):
         """
@@ -333,15 +429,13 @@ class GroupGenerateLayer(nn.Module):
             Output: attn_outputs (bsz, num_heads * seq_len, seq_len, hidden_dim)
                     mask (bsz, num_heads, seq_len, seq_len)
         """
-        epsilon = 1e-30
 
         if epoch == -1:
             epoch = self.num_heads
         
         head_i = epoch % self.num_heads
         if self.training:
-            _, attn_weights = self.multihead_attns[head_i](query, key_value, key_value, 
-                                                          average_attn_weights=False)
+            attn_weights = self.multihead_attns[head_i](query, key_value, key_value)
         else:
             attn_weights = []
             if epoch < self.num_heads:
@@ -349,24 +443,19 @@ class GroupGenerateLayer(nn.Module):
             else:
                 num_heads_use = self.num_heads
             for head_j in range(num_heads_use):
-                _, attn_weights_j = self.multihead_attns[head_j](query, key_value, key_value)
+                attn_weights_j = self.multihead_attns[head_j](query, key_value, key_value)
                 attn_weights.append(attn_weights_j)
             attn_weights = torch.stack(attn_weights, dim=1)
-        
-        attn_weights = attn_weights + epsilon
-        mask = self.sparsemax(torch.log(attn_weights))
-            
-        return mask
+        return attn_weights
 
 
 class GroupSelectLayer(nn.Module):
-    def __init__(self, hidden_dim):
+    def __init__(self, hidden_dim, scale=1):
         super().__init__()
         
         self.hidden_dim = hidden_dim
-        self.multihead_attn = nn.MultiheadAttention(hidden_dim, 1, 
-                                                    batch_first=True)
-        self.sparsemax = Sparsemax(dim=-1)
+        self.multihead_attn = SparseMultiHeadedAttention(hidden_dim, scale=scale)
+        self.scale = scale
 
     def forward(self, query, key, value):
         """
@@ -383,10 +472,8 @@ class GroupSelectLayer(nn.Module):
         bsz, seq_len, hidden_dim = query.shape
 
         # Obtain attention weights
-        _, attn_weights = self.multihead_attn(query, key, key)
-        attn_weights = attn_weights + epsilon  # (batch_size, num_heads, sequence_length, hidden_dim)
-        mask = self.sparsemax(torch.log(attn_weights))
-        mask = mask.transpose(-1, -2)
+        attn_weights = self.multihead_attn(query, key, key)
+        mask = attn_weights.transpose(-1, -2)
 
         # Apply attention weights on what to be attended
         new_shape = list(mask.shape) + [1] * (len(value.shape) - 3)
@@ -409,6 +496,8 @@ class SOPConfig:
                  num_channels: int = None,
                  attn_patch_size: int = None,
                  finetune_layers=None,
+                 group_gen_scale: int = None,
+                 group_sel_scale: int = None,
                 ):
         # all the config from the json file will be in self.__dict__
         super().__init__()
@@ -424,6 +513,8 @@ class SOPConfig:
         self.num_channels = 3
         self.attn_patch_size = 16
         self.finetune_layers=[]
+        self.group_gen_scale = 1
+        self.group_sel_scale = 1
 
         # first load the config from json file if specified
         if json_file is not None:
@@ -450,6 +541,10 @@ class SOPConfig:
             self.attn_patch_size = attn_patch_size
         if finetune_layers is not None:
             self.finetune_layers = finetune_layers
+        if group_gen_scale is not None:
+            self.group_gen_scale = group_gen_scale
+        if group_sel_scale is not None:
+            self.group_sel_scale = group_sel_scale
 
         
     def update_from_json(self, json_file):
@@ -492,6 +587,8 @@ class SOP(nn.Module):
         self.num_masks_sample = config.num_masks_sample
         self.num_masks_max = config.num_masks_max
         self.finetune_layers = config.finetune_layers
+        self.group_gen_scale = config.group_gen_scale if hasattr(config, 'group_gen_scale') else 1
+        self.group_sel_scale = config.group_sel_scale if hasattr(config, 'group_sel_scale') else 1
 
         # blackbox model and finetune layers
         self.blackbox_model = backbone_model
@@ -500,18 +597,20 @@ class SOP(nn.Module):
                 class_weights = get_chained_attr(backbone_model, config.finetune_layers[0]).weight
             except:
                 raise ValueError('class_weights is None and cannot be inferred from backbone_model')
-        try:
-            self.class_weights = copy.deepcopy(class_weights)  # maybe can do this outside
-            print('deep copy class weights')
-        except:
-            self.class_weights = class_weights.clone()
-            print('shallow copy class weights')
+        # try:
+        #     self.class_weights = copy.deepcopy(class_weights)  # maybe can do this outside
+        #     print('deep copy class weights')
+        # except:
+        self.class_weights = nn.Parameter(class_weights.clone())
+            # print('shallow copy class weights')
         
         
         self.input_attn = GroupGenerateLayer(hidden_dim=self.hidden_size,
-                                             num_heads=self.num_heads)
+                                             num_heads=self.num_heads,
+                                             scale=self.group_gen_scale)
         # output
-        self.output_attn = GroupSelectLayer(hidden_dim=self.hidden_size)
+        self.output_attn = GroupSelectLayer(hidden_dim=self.hidden_size,
+                                            scale=self.group_sel_scale)
 
     def init_grads(self):
         # Initialize the weights of the model
