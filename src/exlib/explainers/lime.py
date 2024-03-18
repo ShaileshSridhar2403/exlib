@@ -9,17 +9,17 @@ from .libs.lime.lime_text import LimeTextExplainer
 
 
 def lime_cls_closure(model, collapse):
-    def go(x_np,retain_counts):
+    def go(x_np,patch_retain_counts):
         x = np_to_torch_img(x_np)
         x = x.to(next(model.parameters()).device)
         if collapse:
             x = x[:,0:1,:,:] # even though lime needs no singleton last dimension in its input,
             # for an odd reason they put back 3 of them to match RGB format before passing
             # to batch_predict. So we need to remove the extraneous ones.
-        if retain_counts is None:
+        if patch_retain_counts is None:
             y= model(x)
         else:
-            y = model(x,retain_counts)
+            y = model(x,patch_retain_counts)
         return y.detach().cpu().numpy()
     return go
 
